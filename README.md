@@ -1,4 +1,4 @@
-# whohas (Ashita v4 addon for HorizonXI)
+# whohas (Ashita v4 addon for FFXI)
 
 Shows an on-screen box, whenever an item is highlighted in an item menu, listing which of your characters hold that item, in which container, and how many. Think of it as `findall` with the answer already on screen while you sort your Mog House.
 
@@ -10,15 +10,15 @@ Shows an on-screen box, whenever an item is highlighted in an item menu, listing
   <Ashita>\config\addons\whohas\chars\<CharacterName>.lua
   ```
 
-- When you highlight an item, the addon reads the client's "selected item" id (`GetSelectedItemId()`, the same value the HorizonXI-approved PriceCheck addon uses) and looks it up across every character file plus the live inventory of the character you are on.
+- When you highlight an item, the addon reads the client's "selected item" id (`GetSelectedItemId()`, the same value the PriceCheck addon uses) and looks it up across every character file plus the live inventory of the character you are on.
 - The addon is read-only. It never sends packets, never moves items, and never automates anything.
 
 The box lists the current character first (green), then every other character that holds the item, with the container breakdown and a per-character quantity, and a total across characters.
 
 ## Storage slips (Porter Moogle)
 
-- Each character's storage slips are decoded from the slip's Extra data at snapshot time, using the server-side bit order (`slips.lua`, generated from LandSandBoat's `porter_slip_items.lua`, which is what HorizonXI's server descends from). Items stored on a slip appear in the box as `Storage Slip 04 (Safe)` on that character's row and count toward the total.
-- If the highlighted item can go on a slip, the box adds a `Fits Storage Slip NN` line and names every character holding that slip, where it is, and how many items are already on it. Slips the Porter Moogle does not sell on HorizonXI are marked `(not sold on Horizon)`.
+- Each character's storage slips are decoded from the slip's Extra data at snapshot time, using the server-side bit order (`slips.lua`, generated from LandSandBoat's `porter_slip_items.lua`). Items stored on a slip appear in the box as `Storage Slip 04 (Safe)` on that character's row and count toward the total.
+- If the highlighted item can go on a slip, the box adds a `Fits Storage Slip NN` line and names every character holding that slip, where it is, and how many items are already on it. Slips the Porter Moogle does not sell on your server are flagged as not sold; the list of sold slips is `slips.available` in `slips.lua`.
 - Highlight a slip itself and the box shows how many items are on it per character and lists them (first 40).
 - `/whohas slip` lists every slip on file; `/whohas slip 4` prints everything stored on Storage Slip 04 across characters. `/whohas find` searches slip contents too.
 
@@ -33,7 +33,7 @@ The box opens with a status line: green `OWNED xN` when any character has the it
 
 ## Install
 
-1. Copy the `whohas` folder into `<Ashita>\addons\` (so you end up with `addons\whohas\whohas.lua`, `slips.lua` and `hqpairs.lua` side by side).
+1. Copy the `whohas` folder into `<Ashita>\addons\` so you end up with `addons\whohas\whohas.lua`, `slips.lua` and `hqpairs.lua` side by side. A zip downloaded from GitHub unpacks as `whohas-main`; rename that folder to `whohas` first.
 2. `/addon load whohas` (or add it to your `default.txt`).
 3. Log in on each of your characters once. Each login writes that character's file. From then on the file updates automatically whenever that character's inventory changes.
 
