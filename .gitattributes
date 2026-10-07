@@ -1,0 +1,5 @@
+# Keep the addon files CRLF on checkout so they match what Ashita ships with;
+# everything else follows the platform default.
+*.lua text eol=crlf
+*.md  text
+*.py  text eol=lf

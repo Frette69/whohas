@@ -1,0 +1,12 @@
+# offline test harness scratch install
+fakeinstall/
+
+# generator scratch
+*.pyc
+__pycache__/
+
+# editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
