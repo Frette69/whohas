@@ -39,6 +39,7 @@
 *   /whohas menus              Show the menu keyword filter.
 *   /whohas menus add <kw>     Add a keyword to the menu filter.
 *   /whohas menus remove <kw>  Remove a keyword from the menu filter.
+*   /whohas menus block <kw>   Never show in menus whose name contains <kw> (unblock to undo).
 *   /whohas lock | unlock      Lock or unlock the box position.
 *   /whohas pos <x> <y>        Move the box to a screen position.
 *   /whohas alpha <0.1-1.0>    Set the box background opacity.
@@ -54,7 +55,7 @@
 
 addon.name    = 'whohas';
 addon.author  = 'Frette';
-addon.version = '1.4.0';
+addon.version = '1.4.1';
 addon.desc    = 'Shows which of your characters hold the selected item, and how many, across all storage.';
 addon.link    = '';
 
@@ -78,7 +79,11 @@ local defaults = T{
     show_current      = true,
     menu_filter       = true,
     -- Comma-separated substrings matched (case-insensitive) against the open menu name.
-    menus             = 'inv,bank,equip,shop,auc,delivery,loot,moneyctr,item,stor,safe,lock,satch,sack,case,ward,mog,trade,craft',
+    menus             = 'inventor,bank,equip,shop,auc,delivery,loot,moneyctr,item,storage,safe,lock,satch,sack,case,ward,trade,gift,craft,tskill',
+    -- Menus that must never show the box even if a keyword above matches them. The client keeps a
+    -- stale or meaningless "selected item" while these are open (the Mog House door, for one).
+    menus_block       = 'mogdoor,mogcont,mogpost,myroom,roomlist,bluinven,bluequip,evitem,bankmenu,sort,confyn',
+    menus_version     = 0,      -- bumped by migrate_menus() once the stored lists are on the current defaults
     show_missing      = true,
     show_age          = true,
     show_slip_fit     = true,   -- show which slip the selected item can be stored on
@@ -278,10 +283,37 @@ local function in_item_menu()
     end
     if (#name == 0) then return false; end
     name = name:lower();
+    for kw in (whohas.settings.menus_block or ''):gmatch('[^,%s]+') do
+        if (name:find(kw:lower(), 1, true)) then return false; end
+    end
     for kw in whohas.settings.menus:gmatch('[^,%s]+') do
         if (name:find(kw:lower(), 1, true)) then return true; end
     end
     return false;
+end
+
+-- Settings saved by 1.4.0 and earlier carry the old keyword list ('inv' and 'mog' matched the Blue
+-- Magic and Mog House door menus too) and no block list. Bring them up to date once, keeping any
+-- keyword the player added themselves.
+local MENUS_VERSION = 2;
+local function migrate_menus()
+    local s = whohas.settings;
+    if ((tonumber(s.menus_version) or 0) >= MENUS_VERSION) then return false; end
+    local keep = { };
+    local seen = { };
+    local drop = { inv = true, mog = true, stor = true };
+    for kw in (s.menus or ''):gmatch('[^,%s]+') do
+        kw = kw:lower();
+        if (not drop[kw] and not seen[kw]) then seen[kw] = true; table.insert(keep, kw); end
+    end
+    for kw in defaults.menus:gmatch('[^,%s]+') do
+        if (not seen[kw]) then seen[kw] = true; table.insert(keep, kw); end
+    end
+    s.menus = table.concat(keep, ',');
+    if (s.menus_block == nil or #s.menus_block == 0) then s.menus_block = defaults.menus_block; end
+    s.menus_version = MENUS_VERSION;
+    settings.save();
+    return true;
 end
 
 -------------------------------------------------------------------------------
@@ -1075,7 +1107,7 @@ local function print_help()
     msg('  /whohas current on|off  Include the logged-in character');
     msg('  /whohas filter on|off   Only show inside item menus');
     msg('  /whohas menu          Print the open menu name');
-    msg('  /whohas menus [add|remove <kw>]  Menu keyword filter');
+    msg('  /whohas menus [add|remove|block|unblock <kw>]  Menu keyword filter');
     msg('  /whohas lock|unlock   Lock the box position');
     msg('  /whohas pos <x> <y>   Move the box');
     msg('  /whohas alpha <0.1-1> Background opacity');
@@ -1260,13 +1292,34 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
             whohas.settings.menus = table.concat(list, ',');
             settings.save();
             msg(removed and ('Removed menu keyword "' .. kw .. '".') or ('Keyword "' .. kw .. '" was not in the list.'));
+        elseif (action == 'block' and #kw > 0) then
+            local list = { };
+            for k in (whohas.settings.menus_block or ''):gmatch('[^,%s]+') do
+                if (k:lower() ~= kw) then table.insert(list, k); end
+            end
+            table.insert(list, kw);
+            whohas.settings.menus_block = table.concat(list, ',');
+            settings.save();
+            msg_ok('Blocked menus containing "' .. kw .. '".');
+        elseif (action == 'unblock' and #kw > 0) then
+            local list = { };
+            local removed = false;
+            for k in (whohas.settings.menus_block or ''):gmatch('[^,%s]+') do
+                if (k:lower() ~= kw) then table.insert(list, k); else removed = true; end
+            end
+            whohas.settings.menus_block = table.concat(list, ',');
+            settings.save();
+            msg(removed and ('Unblocked "' .. kw .. '".') or ('"' .. kw .. '" was not in the block list.'));
         elseif (action == 'reset') then
             whohas.settings.menus = defaults.menus;
+            whohas.settings.menus_block = defaults.menus_block;
+            whohas.settings.menus_version = MENUS_VERSION;
             settings.save();
-            msg_ok('Menu keywords reset to defaults.');
+            msg_ok('Menu keywords and block list reset to defaults.');
         else
             msg('Menu keywords: ' .. whohas.settings.menus);
-            msg('Use /whohas menus add <kw>, remove <kw>, or reset.');
+            msg('Blocked menus: ' .. tostring(whohas.settings.menus_block));
+            msg('Use /whohas menus add <kw>, remove <kw>, block <kw>, unblock <kw>, or reset. /whohas menu prints the open menu name.');
         end
         return;
     end
@@ -1478,6 +1531,7 @@ settings.register('settings', 'whohas_settings_cb', function (s)
     if (s ~= nil) then
         whohas.settings = s;
         slips.set_server(whohas.settings.server);
+        migrate_menus();
     end
     settings.save();
 end);
@@ -1485,6 +1539,7 @@ end);
 ashita.events.register('load', 'whohas_load_cb', function ()
     ensure_dirs();
     slips.set_server(whohas.settings.server);
+    if (migrate_menus()) then msg('Menu filter updated to the 1.4.1 defaults (/whohas menus to review).'); end
     local me = get_me();
     whohas.me = me;
     local n, ni, ns = load_all_chars();

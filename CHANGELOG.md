@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1
+
+- Fix: the box could appear with an unrelated item while the Mog House door menu (and some other non-item menus) was open, because the keyword `mog` matched `mogdoor` and the client keeps a stale selected item there. Reported on retail.
+- Menu filter keywords tightened (`inventor` instead of `inv`, `storage` instead of `stor`, `mog` removed, `gift` and `tskill` added) and a block list added (`/whohas menus block|unblock <kw>`; defaults: Mog House door, View House and delivery menus, Blue Magic screens, currencies, confirmation dialogs). Settings from earlier versions are migrated once, keeping custom keywords.
+
 ## 1.4.0
 
 - `/whohas server horizon|retail`: picks the storage slip bit order (LandSandBoat vs retail, which differ on slips 03, 05, 14 and 22; retail adds slips 29 to 33) and the Porter Moogle shop list. Default `horizon`. `slips.lua` now carries both orders; `tools/gen_slips.py` takes a Windower/Resources checkout as its second argument.

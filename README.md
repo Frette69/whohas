@@ -53,7 +53,7 @@ The box opens with a status line: green `OWNED xN` when any character has the it
 | `/whohas missing on` / `off` | Show the box even when no character has the item |
 | `/whohas age on` / `off` | Show how old each character's data is |
 | `/whohas menu` | Print the name of the game menu that is open right now |
-| `/whohas menus` | Show the menu keyword filter (`add <kw>`, `remove <kw>`, `reset`) |
+| `/whohas menus` | Show the menu keyword filter and block list (`add <kw>`, `remove <kw>`, `block <kw>`, `unblock <kw>`, `reset`) |
 | `/whohas lock` / `unlock` | Lock or unlock the box position |
 | `/whohas pos <x> <y>` | Move the box to a screen position |
 | `/whohas alpha <0.1-1.0>` | Background opacity |
@@ -72,7 +72,7 @@ The box opens with a status line: green `OWNED xN` when any character has the it
 
 ## Tuning the menu filter
 
-The box only appears while a menu whose internal name contains one of the filter keywords is open. The defaults cover inventory, Mog House storage, equipment, shops, the AH, delivery box, treasure pool, trades and synthesis. If the box is missing in a menu where you want it, open that menu and run `/whohas menu` to see its name, then `/whohas menus add <keyword>`.
+The box only appears while a menu whose internal name contains one of the filter keywords is open, and never while a menu on the block list is open. The defaults cover the item lists (`inventor` and `bank`, which is what the Mog House containers open as), equipment, shops, the AH, delivery box, treasure pool, trades and synthesis. The block list covers the Mog House door, View House and delivery menus, the Blue Magic screens, the currencies list and a few confirmation dialogs: the client keeps a stale "selected item" while those are open, so the box would show an unrelated item. If the box is missing in a menu where you want it, open that menu and run `/whohas menu` to see its name, then `/whohas menus add <keyword>`. If it appears somewhere it should not, `/whohas menus block <keyword>`. Upgrading from 1.4.0 or earlier updates both lists once, keeping any keyword you added yourself.
 
 ## Notes
 

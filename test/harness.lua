@@ -45,7 +45,7 @@ local saved_settings = nil;
 function whohas_settings_probe() return LAST_SETTINGS; end
 package.preload['settings'] = function ()
     return {
-        load = function (d) LAST_SETTINGS = T(d); return LAST_SETTINGS; end,
+        load = function (d) local c = { }; for k, v in pairs(d) do c[k] = v; end LAST_SETTINGS = T(c); return LAST_SETTINGS; end,   -- copy, like Ashita's settings.load
         save = function () saved_settings = true; return true; end,
         register = function () end,
     };
@@ -79,7 +79,7 @@ ashita = {
 
 -- game state
 DIR_MODE = 'names';
-MENU_NAME = 'menu    inv';
+MENU_NAME = 'menu    inventor';
 LOGIN = 2;
 SELECTED = 0;
 COUNTER = 1;
@@ -233,13 +233,20 @@ real_print(io.open('./fakeinstall/config/addons/whohas/chars/Alpha.lua'):read('*
 MENU_NAME = ''; imgui_log = {}; present(); assert(#imgui_log == 0, 'drew with no menu open');
 cmd('/whohas filter off'); imgui_log = {}; present(); assert(#imgui_log > 0, 'did not draw with filter off');
 cmd('/whohas filter on'); MENU_NAME = 'menu    magic'; imgui_log = {}; present(); assert(#imgui_log == 0, 'drew in magic menu');
+-- Blocked menus win over keyword matches: the Mog House door and the Blue Magic equip screen.
+MENU_NAME = 'menu    mogdoor'; imgui_log = {}; present(); assert(#imgui_log == 0, 'drew in mog door menu');
+MENU_NAME = 'menu    bluequip'; imgui_log = {}; present(); assert(#imgui_log == 0, 'drew in blue magic equip menu');
+cmd('/whohas menus unblock bluequip'); imgui_log = {}; present(); assert(#imgui_log > 0, 'unblock did not take effect');
+cmd('/whohas menus block bluequip'); imgui_log = {}; present(); assert(#imgui_log == 0, 'block did not take effect');
+MENU_NAME = 'menu    bank    '; imgui_log = {}; present(); assert(#imgui_log > 0, 'did not draw in the Mog House container menu');
+MENU_NAME = 'menu    bankmenu'; imgui_log = {}; present(); assert(#imgui_log == 0, 'drew in the gardening menu');
 
 -- Pin keeps it up
-MENU_NAME = 'menu    inv'; cmd('/whohas pin'); MENU_NAME = ''; imgui_log = {}; present(); assert(#imgui_log > 0, 'pin did not keep box');
+MENU_NAME = 'menu    inventor'; cmd('/whohas pin'); MENU_NAME = ''; imgui_log = {}; present(); assert(#imgui_log > 0, 'pin did not keep box');
 cmd('/whohas unpin');
 
 -- Current-char exclusion
-MENU_NAME = 'menu    inv'; cmd('/whohas current off'); imgui_log = {}; present();
+MENU_NAME = 'menu    inventor'; cmd('/whohas current off'); imgui_log = {}; present();
 joined = table.concat(imgui_log, '\n'); assert(not joined:find('Text%(Bravo%)') and not joined:find('TextColored%(.*Bravo'), 'current char still shown');
 cmd('/whohas current on');
 
@@ -287,6 +294,27 @@ end
 restart('names');
 restart('full');
 restart('nil');
+-- Settings written by 1.4.0 or earlier: the menu keyword list must be migrated once, keeping custom keywords.
+events = {};
+ashita.events.register = function (name, alias, fn) events[name] = fn; end;
+package.loaded['slips'] = nil;
+dofile('whohas.lua');
+do
+    local st = whohas_settings_probe();
+    st.menus = 'inv,bank,mog,custom'; st.menus_block = ''; st.menus_version = 0;
+    CHAR = { Name = 'Bravo', ServerId = 222 }; LOGIN = 2;
+    print_log = {};
+    events['load']();
+    assert(table.concat(print_log, '\n'):find('Menu filter updated'), 'migration message missing');
+    assert(st.menus_version == 2, 'menus_version not bumped');
+    assert(st.menus:find('custom') and st.menus:find('inventor') and st.menus:find('tskill'), 'migrated list missing entries: ' .. st.menus);
+    assert(not st.menus:find('mog') and not st.menus:match('^inv,') and not st.menus:find(',inv,'), 'old keywords survived: ' .. st.menus);
+    assert(st.menus_block:find('mogdoor'), 'block list not filled: ' .. tostring(st.menus_block));
+    print_log = {};
+    events['load']();
+    assert(not table.concat(print_log, '\n'):find('Menu filter updated'), 'migration ran twice');
+    LOGIN = 0; events['unload']();
+end
 -- Index missing entirely (e.g. upgraded from v1.1.0): folder scan must rebuild it.
 os.remove('./fakeinstall/config/addons/whohas/chars/index.lua');
 restart('names');
