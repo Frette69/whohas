@@ -42,9 +42,10 @@ package.preload['chat'] = function ()
     return c;
 end;
 local saved_settings = nil;
+function whohas_settings_probe() return LAST_SETTINGS; end
 package.preload['settings'] = function ()
     return {
-        load = function (d) return T(d); end,
+        load = function (d) LAST_SETTINGS = T(d); return LAST_SETTINGS; end,
         save = function () saved_settings = true; return true; end,
         register = function () end,
     };
@@ -84,7 +85,7 @@ SELECTED = 0;
 COUNTER = 1;
 CHAR = { Name = 'Alpha', ServerId = 111 };
 CONTAINERS = {};   -- cid -> { [idx] = { Id=, Count= } }
-local ITEM_DB = { [4096] = { Name = { 'Fire Crystal' }, StackSize = 12 }, [12345] = { Name = { 'Scorpion Harness' }, StackSize = 1 }, [4509] = { Name = { 'Distilled Water' }, StackSize = 12 }, [12511] = { Name = { 'Fighters Mask' }, LogNameSingular = { "fighter's mask" }, StackSize = 1 }, [12638] = { Name = { 'Fighters Lorica' }, StackSize = 1 }, [13868] = { Name = { 'Wyrm Armet' }, StackSize = 1 }, [29315] = { Name = { 'Storage Slip 04' }, StackSize = 1 }, [15225] = { Name = { 'Fgtr. Mask +1' }, LogNameSingular = { "fighter's mask +1" }, StackSize = 1 }, [15072] = { Name = { 'Abyss Burgeonet' }, StackSize = 1 }, [15245] = { Name = { 'Abyss Burgeonet +1' }, StackSize = 1 }, [29318] = { Name = { 'Storage Slip 07' }, StackSize = 1 }, [14058] = { Name = { 'Crimson Fng. Gnt.' }, LogNameSingular = { 'crimson finger gauntlets' }, StackSize = 1 }, [14059] = { Name = { 'Blood Fng. Gnt.' }, LogNameSingular = { 'blood finger gauntlets' }, StackSize = 1 }, [1336] = { Name = { 'Wyrmal Abj: Hn.' }, LogNameSingular = { 'wyrmal abjuration: hands' }, StackSize = 1 } };
+local ITEM_DB = { [4096] = { Name = { 'Fire Crystal' }, StackSize = 12 }, [12345] = { Name = { 'Scorpion Harness' }, StackSize = 1 }, [4509] = { Name = { 'Distilled Water' }, StackSize = 12 }, [12511] = { Name = { 'Fighters Mask' }, LogNameSingular = { "fighter's mask" }, StackSize = 1 }, [12638] = { Name = { 'Fighters Lorica' }, StackSize = 1 }, [13868] = { Name = { 'Wyrm Armet' }, StackSize = 1 }, [29315] = { Name = { 'Storage Slip 04' }, StackSize = 1 }, [15225] = { Name = { 'Fgtr. Mask +1' }, LogNameSingular = { "fighter's mask +1" }, StackSize = 1 }, [15072] = { Name = { 'Abyss Burgeonet' }, StackSize = 1 }, [15245] = { Name = { 'Abyss Burgeonet +1' }, StackSize = 1 }, [29318] = { Name = { 'Storage Slip 07' }, StackSize = 1 }, [14058] = { Name = { 'Crimson Fng. Gnt.' }, LogNameSingular = { 'crimson finger gauntlets' }, StackSize = 1 }, [14059] = { Name = { 'Blood Fng. Gnt.' }, LogNameSingular = { 'blood finger gauntlets' }, StackSize = 1 }, [1336] = { Name = { 'Wyrmal Abj: Hn.' }, LogNameSingular = { 'wyrmal abjuration: hands' }, StackSize = 1 }, [15571] = { Name = { 'Slip5 Pos54 Horizon' }, StackSize = 1 }, [15362] = { Name = { 'Slip5 Pos54 Retail' }, StackSize = 1 } };
 
 function GetPlayerEntity() return CHAR; end
 AshitaCore = {
@@ -205,8 +206,27 @@ cmd('/whohas debug');
 
 -- Item that fits a slip nobody has
 SELECTED = 12008; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
-assert(joined:find('Fits Storage Slip 08') and joined:find('no character has this slip') and joined:find('not sold on Horizon'), 'fits/no-holder text missing: ' .. joined);
+assert(joined:find('Fits Storage Slip 08') and joined:find('no character has this slip') and joined:find('not sold on this server'), 'fits/no-holder text missing: ' .. joined);
 cmd('/whohas find fighters'); cmd('/whohas slip'); cmd('/whohas slip 4'); cmd('/whohas slip 99'); cmd('/whohas slipfit off'); cmd('/whohas slipfit on'); cmd('/whohas slipitems off'); cmd('/whohas slipitems on');
+
+-- Server toggle: slip 05 bit 54 is a different item in the retail order, and retail sells slip 08.
+CONTAINERS[1][9] = { Id = 29316, Count = 1, Extra = string.rep('\0', 6) .. string.char(0x20) .. string.rep('\0', 21) };
+cmd('/whohas scan');
+print_log = {}; cmd('/whohas slip 5'); joined = table.concat(print_log, '\n');
+assert(joined:find('Slip5 Pos54 Horizon') and not joined:find('Slip5 Pos54 Retail'), 'horizon slip order wrong: ' .. joined);
+print_log = {}; cmd('/whohas server'); assert(table.concat(print_log, '\n'):find('Server: horizon'), 'server status missing');
+print_log = {}; cmd('/whohas server retail'); assert(table.concat(print_log, '\n'):find('Server set to retail'), 'server switch message missing');
+assert(whohas_settings_probe().server == 'retail', 'server setting not saved');
+cmd('/whohas scan');
+print_log = {}; cmd('/whohas slip 5'); joined = table.concat(print_log, '\n');
+assert(joined:find('Slip5 Pos54 Retail') and not joined:find('Slip5 Pos54 Horizon'), 'retail slip order wrong: ' .. joined);
+SELECTED = 12008; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(joined:find('Fits Storage Slip 08') and not joined:find('not sold on this server'), 'retail should sell slip 08: ' .. joined);
+print_log = {}; cmd('/whohas slip 33'); assert(not table.concat(print_log, '\n'):find('No such slip'), 'retail slip 33 should exist');
+print_log = {}; cmd('/whohas slip 34'); assert(table.concat(print_log, '\n'):find('Use 1%-33'), 'slip range message wrong');
+cmd('/whohas server horizon'); cmd('/whohas scan');
+print_log = {}; cmd('/whohas slip 5'); assert(table.concat(print_log, '\n'):find('Slip5 Pos54 Horizon'), 'switch back to horizon failed');
+CONTAINERS[1][9] = nil; cmd('/whohas scan');
 real_print(io.open('./fakeinstall/config/addons/whohas/chars/Alpha.lua'):read('*a'));
 
 -- Menu filter: hide when no menu open, show when filter off
@@ -271,4 +291,25 @@ restart('nil');
 os.remove('./fakeinstall/config/addons/whohas/chars/index.lua');
 restart('names');
 assert(io.open('./fakeinstall/config/addons/whohas/chars/index.lua'), 'index not rebuilt');
+-- ---------------------------------------------------------------- tampered data files
+-- A character file that carries code instead of data must not run anything, and a hostile
+-- name inside it must never become part of a path.
+PAYLOAD_RAN = nil;
+local tf = io.open('./fakeinstall/config/addons/whohas/chars/Mallory.lua', 'w');
+tf:write("PAYLOAD_RAN = true\nlocal h = io.open('./fakeinstall/payload_marker', 'w'); h:write('x'); h:close();\n"
+    .. "return { name = '../../../../payload', items = {}, slips = {} }\n");
+tf:close();
+local ti = io.open('./fakeinstall/config/addons/whohas/chars/index.lua', 'w');
+ti:write("return { 'Bravo', 'Mallory', '../../evil' }"); ti:close();
+restart('names');
+assert(PAYLOAD_RAN == nil, 'tampered character file executed code');
+assert(not io.open('./fakeinstall/payload_marker'), 'tampered character file wrote a file');
+print_log = {};
+events['command']({ command = '/whohas list' });
+local listed = table.concat(print_log, '\n');
+assert(listed:find('Bravo') and not listed:find('payload') and not listed:find('Mallory'), 'tampered entry was loaded: ' .. listed);
+print_log = {};
+events['command']({ command = '/whohas forget ../../evil' });
+assert(table.concat(print_log, '\n'):find('No stored data'), 'forget accepted a path-like name');
+os.remove('./fakeinstall/config/addons/whohas/chars/Mallory.lua');
 real_print('ALL HARNESS CHECKS PASSED');

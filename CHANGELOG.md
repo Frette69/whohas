@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0
+
+- `/whohas server horizon|retail`: picks the storage slip bit order (LandSandBoat vs retail, which differ on slips 03, 05, 14 and 22; retail adds slips 29 to 33) and the Porter Moogle shop list. Default `horizon`. `slips.lua` now carries both orders; `tools/gen_slips.py` takes a Windower/Resources checkout as its second argument.
+- Hardening: character and index files are loaded in an empty sandbox and must be plain data tables; character names are validated (letters only) everywhere they become part of a path; `/whohas forget` refuses anything else; the zone-in packet parse is wrapped in `pcall`; index entries that no longer load are dropped.
+- The unsold-slip tag reads `(not sold on this server)`.
+- Harness: tampered data file and server toggle scenarios.
+
 ## 1.3.0
 
 - `hqpairs.lua`: NQ / HQ relations whose names differ (Crimson -> Blood Finger Gauntlets, Koenig -> Kaiser, Adaman -> Armada, abjuration and cursed pieces, crafted HQs with their own names, Leaping -> Bounding Boots). Generated from LandSandBoat data by `tools/gen_hqpairs.py`.

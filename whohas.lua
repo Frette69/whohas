@@ -12,8 +12,9 @@
 *   - When you highlight an item, the addon reads the client's "selected item" id (the same
 *     value the HorizonXI-approved PriceCheck addon uses) and looks it up across every
 *     character file, plus the live inventory of the character you are on.
-*   - Storage slips (Porter Moogle) are decoded from each slip's Extra data using the
-*     server-side bit order (slips.lua, generated from LandSandBoat), so items stored on a
+*   - Storage slips (Porter Moogle) are decoded from each slip's Extra data using your
+*     server's bit order (slips.lua carries LandSandBoat's order for HorizonXI and the retail
+*     order from Windower's resources; pick one with /whohas server), so items stored on a
 *     slip show up as "Storage Slip 04 (Safe)", and any item that fits a slip shows which slip
 *     and which characters hold that slip.
 *   - The box opens with an OWNED / Not owned status line, and flags when another version of the
@@ -44,6 +45,7 @@
 *   /whohas slip [n]           List storage slips on file, or everything stored on slip n.
 *   /whohas slipfit on | off   Show which storage slip the selected item can be stored on.
 *   /whohas slipitems on | off When a slip is selected, list what is stored on it.
+*   /whohas server horizon | retail  Which server you play on: selects the slip bit order and shop list.
 *   /whohas variants on | off  Show other versions (+1, -1, NQ) of the selected item that anyone holds.
 *   /whohas forget <name>      Delete the stored data for a character.
 *   /whohas debug              Print the selected item id, index, and menu name.
@@ -52,7 +54,7 @@
 
 addon.name    = 'whohas';
 addon.author  = 'Frette';
-addon.version = '1.3.0';
+addon.version = '1.4.0';
 addon.desc    = 'Shows which of your characters hold the selected item, and how many, across all storage.';
 addon.link    = '';
 
@@ -87,6 +89,7 @@ local defaults = T{
     pos_x             = 100,
     pos_y             = 100,
     include_temporary = false,
+    server            = 'horizon',   -- 'horizon' or 'retail': storage slip bit order and which slips the Porter Moogle sells
 };
 
 -------------------------------------------------------------------------------
@@ -117,6 +120,22 @@ local SNAPSHOT_DELAY  = 2;   -- seconds of inventory quiet before a snapshot is 
 local LOAD_DELAY      = 3;   -- seconds after addon load before the first snapshot
 local READY_FALLBACK  = 20;  -- seconds after zone-in to trust containers even without packet 0x1D
 
+-- Character names are letters only (FFXI allows 3 to 15). Everything that becomes part of a file
+-- path goes through this, so a tampered index or character file can never point outside the
+-- data folder.
+local function valid_name(n)
+    return type(n) == 'string' and #n >= 1 and #n <= 20 and n:match('^%a+$') ~= nil;
+end
+
+-- Runs a data file as plain data: the chunk gets an empty environment, so a file that is not
+-- just 'return { ... }' cannot call anything (io, os, AshitaCore, ...) and fails harmlessly.
+local function run_data_file(path)
+    local chunk = loadfile(path);
+    if (chunk == nil) then return nil; end
+    if (setfenv ~= nil) then setfenv(chunk, { }); end
+    return chunk();
+end
+
 -------------------------------------------------------------------------------
 -- State
 -------------------------------------------------------------------------------
@@ -135,7 +154,7 @@ local whohas = T{
     item_name    = '',
     rows         = { },
     total        = 0,
-    fits         = { },      -- slips the selected item can be stored on: { slip_id, name, horizon, holders = { {name, where} } }
+    fits         = { },      -- slips the selected item can be stored on: { slip_id, name, sold, holders = { {name, where} } }
     slip_rows    = { },      -- when the selected item is a slip: { {name, count, names = { ... }} }
     variants     = { },      -- other versions (+1, -1, NQ) of the selected item: { {id, name, rows, total} }
     owned_all    = 0,        -- copies of the selected item across every character, current included
@@ -216,7 +235,7 @@ local function get_me()
     local player = GetPlayerEntity();
     if (player == nil) then return nil, 0; end
     local name = player.Name;
-    if (name == nil or #name == 0) then return nil, 0; end
+    if (not valid_name(name)) then return nil, 0; end
     return name, (player.ServerId or 0);
 end
 
@@ -348,14 +367,10 @@ end
 local function read_index()
     local names = { };
     if (not ashita.fs.exists(index_file())) then return names; end
-    local ok, data = pcall(function ()
-        local chunk = loadfile(index_file());
-        if (chunk == nil) then return nil; end
-        return chunk();
-    end);
+    local ok, data = pcall(run_data_file, index_file());
     if (ok and type(data) == 'table') then
         for _, n in ipairs(data) do
-            if (type(n) == 'string' and #n > 0) then table.insert(names, n); end
+            if (valid_name(n)) then table.insert(names, n); end
         end
     end
     return names;
@@ -430,12 +445,8 @@ end
 
 local function load_char_file(path)
     if (not ashita.fs.exists(path)) then return nil; end
-    local ok, data = pcall(function ()
-        local chunk = loadfile(path);
-        if (chunk == nil) then return nil; end
-        return chunk();
-    end);
-    if (ok and type(data) == 'table' and type(data.name) == 'string' and type(data.items) == 'table') then
+    local ok, data = pcall(run_data_file, path);
+    if (ok and type(data) == 'table' and valid_name(data.name) and type(data.items) == 'table') then
         if (type(data.slips) ~= 'table') then data.slips = { }; end
         return index_char(data);
     end
@@ -455,19 +466,23 @@ local function load_all_chars()
     for _, n in ipairs(from_scan) do
         if (not seen[n]) then seen[n] = true; table.insert(candidates, n); end
     end
-    local missing_from_index = false;
+    local index_dirty = false;
+    local index_has = { };
+    for _, n in ipairs(from_index) do index_has[n] = true; end
     for _, name in ipairs(candidates) do
         local data = load_char_file(char_file(name));
         if (data ~= nil) then
             whohas.chars[data.name] = data;
             loaded = loaded + 1;
-            local in_index = false;
-            for _, n in ipairs(from_index) do if (n == data.name) then in_index = true; end end
-            if (not in_index) then missing_from_index = true; end
+            if (not index_has[data.name]) then index_dirty = true; end
+        elseif (index_has[name]) then
+            -- Listed in the index but the file is missing or not valid data: drop the entry.
+            index_dirty = true;
         end
     end
-    -- Repair the index if the folder scan found files the index did not know about.
-    if (missing_from_index) then
+    -- Rewrite the index when the folder scan found files it did not know about, or when it
+    -- listed something that did not load.
+    if (index_dirty) then
         local names = { };
         for n, _ in pairs(whohas.chars) do table.insert(names, n); end
         write_index(names);
@@ -664,7 +679,7 @@ local function build_fits(id)
                 table.insert(holders, { name = name, where = table.concat(places, ', '), stored = stored, current = (name == whohas.me) });
             end
         end
-        table.insert(fits, { slip = sid, name = slips.name(sid), horizon = slips.on_horizon(sid), holders = holders });
+        table.insert(fits, { slip = sid, name = slips.name(sid), sold = slips.sold_here(sid), holders = holders });
     end
     return fits;
 end
@@ -889,9 +904,9 @@ local function draw_box(id)
             imgui.Separator();
             for _, f in ipairs(whohas.fits) do
                 imgui.TextColored({ 0.6, 0.8, 1.0, 1.0 }, 'Fits ' .. f.name);
-                if (not f.horizon) then
+                if (not f.sold) then
                     imgui.SameLine();
-                    imgui.TextDisabled('(not sold on Horizon)');
+                    imgui.TextDisabled('(not sold on this server)');
                 end
                 if (#f.holders == 0) then
                     imgui.SameLine();
@@ -1030,6 +1045,10 @@ local function forget_char(name)
         msg_err('No stored data for "' .. name .. '".');
         return;
     end
+    if (not valid_name(found)) then
+        msg_err('Refusing to touch a file for an invalid character name.');
+        return;
+    end
     whohas.chars[found] = nil;
     whohas.data_version = whohas.data_version + 1;
     local path = char_file(found);
@@ -1063,6 +1082,7 @@ local function print_help()
     msg('  /whohas slip [n]      List storage slips on file, or what is on slip n');
     msg('  /whohas slipfit on|off   Show which slip an item fits');
     msg('  /whohas slipitems on|off Show slip contents when a slip is selected');
+    msg('  /whohas server horizon|retail  Which server you play on (slip bit order, shop list)');
     msg('  /whohas variants on|off  Show +1 / -1 / NQ versions anyone holds');
     msg('  /whohas forget <name> Delete a character\'s data');
     msg('  /whohas debug         Show selected item + menu info');
@@ -1279,6 +1299,21 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
         return;
     end
 
+    if (sub == 'server') then
+        local v = (args[3] or ''):lower();
+        if (v == 'horizon' or v == 'retail') then
+            whohas.settings.server = v;
+            settings.save();
+            slips.set_server(v);
+            whohas.data_version = whohas.data_version + 1;
+            msg_ok(string.format('Server set to %s: storage slip bit order and the Porter Moogle shop list now follow %s.', v, v));
+            msg('Slip contents already on file were decoded with the previous order; /whohas scan on each character (or log in on them) refreshes them.');
+            return;
+        end
+        msg(string.format('Server: %s (slip bit order and shop list). Use /whohas server horizon|retail.', whohas.settings.server));
+        return;
+    end
+
     if (sub == 'forget') then
         forget_char(args[3]);
         return;
@@ -1302,7 +1337,7 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
             return;
         end
         local sid = 29311 + n;
-        if (not slips.is_slip(sid)) then msg_err('No such slip. Use 1-28.'); return; end
+        if (not slips.is_slip(sid)) then msg_err(string.format('No such slip. Use 1-%d.', #slips.ids)); return; end
         local any = false;
         for cname, c in pairs(whohas.chars) do
             local s = (c.slips or { })[sid];
@@ -1381,10 +1416,10 @@ ashita.events.register('packet_in', 'whohas_packet_in_cb', function (e)
         whohas.ready = false;
         whohas.dirty = false;
         whohas.zoned_at = os.time();
-        local name = struct.unpack('c16', e.data, 0x84 + 0x01);
-        if (name ~= nil) then
+        local ok, name = pcall(struct.unpack, 'c16', e.data, 0x84 + 0x01);
+        if (ok and type(name) == 'string') then
             name = name:gsub('%z', '');
-            if (#name > 0) then whohas.me = name; end
+            if (valid_name(name)) then whohas.me = name; end
         end
         return;
     end
@@ -1442,12 +1477,14 @@ end);
 settings.register('settings', 'whohas_settings_cb', function (s)
     if (s ~= nil) then
         whohas.settings = s;
+        slips.set_server(whohas.settings.server);
     end
     settings.save();
 end);
 
 ashita.events.register('load', 'whohas_load_cb', function ()
     ensure_dirs();
+    slips.set_server(whohas.settings.server);
     local me = get_me();
     whohas.me = me;
     local n, ni, ns = load_all_chars();

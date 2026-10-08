@@ -17,10 +17,11 @@ The box lists the current character first (green), then every other character th
 
 ## Storage slips (Porter Moogle)
 
-- Each character's storage slips are decoded from the slip's Extra data at snapshot time, using the server-side bit order (`slips.lua`, generated from LandSandBoat's `porter_slip_items.lua`). Items stored on a slip appear in the box as `Storage Slip 04 (Safe)` on that character's row and count toward the total.
-- If the highlighted item can go on a slip, the box adds a `Fits Storage Slip NN` line and names every character holding that slip, where it is, and how many items are already on it. Slips the Porter Moogle does not sell on your server are flagged as not sold; the list of sold slips is `slips.available` in `slips.lua`.
+- Each character's storage slips are decoded from the slip's Extra data at snapshot time, using your server's bit order (`slips.lua` carries both LandSandBoat's order and the retail order; see `/whohas server` below). Items stored on a slip appear in the box as `Storage Slip 04 (Safe)` on that character's row and count toward the total.
+- If the highlighted item can go on a slip, the box adds a `Fits Storage Slip NN` line and names every character holding that slip, where it is, and how many items are already on it. Slips the Porter Moogle does not sell on your server are flagged `(not sold on this server)`.
 - Highlight a slip itself and the box shows how many items are on it per character and lists them (first 40).
 - `/whohas slip` lists every slip on file; `/whohas slip 4` prints everything stored on Storage Slip 04 across characters. `/whohas find` searches slip contents too.
+- Private servers built on LandSandBoat and retail do not store slip contents in the same bit order (slips 03, 05, 14 and 22 differ, and retail has slips 29 to 33). `/whohas server horizon` (the default) or `/whohas server retail` picks the order and the shop list. After switching, log in on each character once, or run `/whohas scan`, so the slip contents on file are decoded again with the new order.
 
 ## Already have it? Already upgraded it?
 
@@ -59,6 +60,7 @@ The box opens with a status line: green `OWNED xN` when any character has the it
 | `/whohas slip [n]` | List storage slips on file, or everything stored on slip n |
 | `/whohas slipfit on` / `off` | Show which slip the selected item fits |
 | `/whohas slipitems on` / `off` | List slip contents when a slip is selected |
+| `/whohas server horizon` / `retail` | Which server you play on: storage slip bit order and the Porter Moogle shop list |
 | `/whohas variants on` / `off` | Show +1 / -1 / NQ versions of the selected item that anyone holds |
 | `/whohas forget <name>` | Delete the stored data for a character |
 | `/whohas files` | Show the data folder and exactly which character files are on disk (use this if data seems to vanish between sessions) |
@@ -78,3 +80,4 @@ The box only appears while a menu whose internal name contains one of the filter
 - The Temporary container is skipped by default.
 - Character files are found at load time through `chars\index.lua` (kept up to date on every save) plus a folder scan, so persistence does not depend on how Ashita lists directories. If a character is missing after a restart, run `/whohas files` to see what is on disk and `/whohas reload` to re-read it.
 - Settings are saved per character by Ashita's settings library under `config\addons\whohas\<Name>_<id>\settings.lua`. The character item files live in `config\addons\whohas\chars\` and are shared by every character.
+- Character files are plain data. The addon loads them in an empty sandbox, ignores any file that is not just a data table, and only accepts letters-only character names, so nothing in that folder can run code or point outside it.
