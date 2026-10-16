@@ -35,6 +35,25 @@ package.preload['hqpairs'] = function ()
     end
     return M;
 end;
+-- Armor Depository sets, same shape as the generated armorsets.lua (two sets are enough here).
+package.preload['armorsets'] = function ()
+    local M = { };
+    M.slots = { 'Head', 'Body', 'Hands', 'Legs', 'Feet' };
+    M.sets = {
+        { id = 1, ki = 654, cost = 500, label = "Fighter's Armor", pieces = { 12511, 12638, 13961, 14214, 14089 } },
+        { id = 63, ki = 861, cost = 1000, label = "Warrior's Armor", pieces = { 15072, 15087, 15102, 15117, 15132 } },
+        { id = 89, ki = 1059, cost = 600, label = 'Argent Attire', pieces = { 0, 11310, 0, 16365, 0 } },
+    };
+    M.by_item = { }; M.by_ki = { };
+    for _, s in ipairs(M.sets) do
+        M.by_ki[s.ki] = s;
+        for _, id in ipairs(s.pieces) do
+            if (id ~= 0) then local t = M.by_item[id]; if (t == nil) then t = { }; M.by_item[id] = t; end table.insert(t, s); end
+        end
+    end
+    M.pieces = function (s) local out = { }; for k, id in ipairs(s.pieces) do if (id ~= 0) then table.insert(out, { slot = M.slots[k], id = id }); end end return out; end
+    return M;
+end;
 package.preload['chat'] = function ()
     local c = {};
     for _, k in ipairs({ 'header','message','success','error','warning','critical' }) do c[k] = function (s) return '[' .. k .. ']' .. tostring(s); end end
@@ -85,13 +104,15 @@ SELECTED = 0;
 COUNTER = 1;
 CHAR = { Name = 'Alpha', ServerId = 111 };
 CONTAINERS = {};   -- cid -> { [idx] = { Id=, Count= } }
-local ITEM_DB = { [4096] = { Name = { 'Fire Crystal' }, StackSize = 12 }, [12345] = { Name = { 'Scorpion Harness' }, StackSize = 1 }, [4509] = { Name = { 'Distilled Water' }, StackSize = 12 }, [12511] = { Name = { 'Fighters Mask' }, LogNameSingular = { "fighter's mask" }, StackSize = 1 }, [12638] = { Name = { 'Fighters Lorica' }, StackSize = 1 }, [13868] = { Name = { 'Wyrm Armet' }, StackSize = 1 }, [29315] = { Name = { 'Storage Slip 04' }, StackSize = 1 }, [15225] = { Name = { 'Fgtr. Mask +1' }, LogNameSingular = { "fighter's mask +1" }, StackSize = 1 }, [15072] = { Name = { 'Abyss Burgeonet' }, StackSize = 1 }, [15245] = { Name = { 'Abyss Burgeonet +1' }, StackSize = 1 }, [29318] = { Name = { 'Storage Slip 07' }, StackSize = 1 }, [14058] = { Name = { 'Crimson Fng. Gnt.' }, LogNameSingular = { 'crimson finger gauntlets' }, StackSize = 1 }, [14059] = { Name = { 'Blood Fng. Gnt.' }, LogNameSingular = { 'blood finger gauntlets' }, StackSize = 1 }, [1336] = { Name = { 'Wyrmal Abj: Hn.' }, LogNameSingular = { 'wyrmal abjuration: hands' }, StackSize = 1 }, [15571] = { Name = { 'Slip5 Pos54 Horizon' }, StackSize = 1 }, [15362] = { Name = { 'Slip5 Pos54 Retail' }, StackSize = 1 } };
+KEY_ITEMS = {};    -- key item id -> true for the logged-in character
+local KI_NAMES = { [654] = "Fighter's armor claim slip", [861] = "Warrior's armor claim slip" };   -- 1059 deliberately unnamed: falls back to the generated label
+local ITEM_DB = { [4096] = { Name = { 'Fire Crystal' }, StackSize = 12 }, [12345] = { Name = { 'Scorpion Harness' }, StackSize = 1 }, [4509] = { Name = { 'Distilled Water' }, StackSize = 12 }, [12511] = { Name = { 'Fighters Mask' }, LogNameSingular = { "fighter's mask" }, StackSize = 1 }, [12638] = { Name = { 'Fighters Lorica' }, StackSize = 1 }, [13868] = { Name = { 'Wyrm Armet' }, StackSize = 1 }, [29315] = { Name = { 'Storage Slip 04' }, StackSize = 1 }, [15225] = { Name = { 'Fgtr. Mask +1' }, LogNameSingular = { "fighter's mask +1" }, StackSize = 1 }, [15072] = { Name = { 'Abyss Burgeonet' }, StackSize = 1 }, [15245] = { Name = { 'Abyss Burgeonet +1' }, StackSize = 1 }, [29318] = { Name = { 'Storage Slip 07' }, StackSize = 1 }, [14058] = { Name = { 'Crimson Fng. Gnt.' }, LogNameSingular = { 'crimson finger gauntlets' }, StackSize = 1 }, [14059] = { Name = { 'Blood Fng. Gnt.' }, LogNameSingular = { 'blood finger gauntlets' }, StackSize = 1 }, [1336] = { Name = { 'Wyrmal Abj: Hn.' }, LogNameSingular = { 'wyrmal abjuration: hands' }, StackSize = 1 }, [15571] = { Name = { 'Slip5 Pos54 Horizon' }, StackSize = 1 }, [15362] = { Name = { 'Slip5 Pos54 Retail' }, StackSize = 1 }, [13961] = { Name = { 'Fighters Mufflers' }, StackSize = 1 }, [14214] = { Name = { 'Fighters Cuisses' }, StackSize = 1 }, [14089] = { Name = { 'Fighters Leggings' }, StackSize = 1 }, [11310] = { Name = { 'Argent Coat' }, StackSize = 1 }, [16365] = { Name = { 'Argent Pants' }, StackSize = 1 } };
 
 function GetPlayerEntity() return CHAR; end
 AshitaCore = {
     GetInstallPath = function () return './fakeinstall'; end,
     GetMemoryManager = function () return {
-        GetPlayer = function () return { GetLoginStatus = function () return LOGIN; end }; end,
+        GetPlayer = function () return { GetLoginStatus = function () return LOGIN; end, HasKeyItem = function (_, id) return KEY_ITEMS[id] == true; end }; end,
         GetInventory = function () return {
             GetSelectedItemId = function () return SELECTED; end,
             GetSelectedItemIndex = function () return 3; end,
@@ -101,7 +122,7 @@ AshitaCore = {
             GetContainerItem = function (_, cid, idx) local c = CONTAINERS[cid]; return c and c[idx] or { Id = 0, Count = 0 }; end,
         }; end,
     }; end,
-    GetResourceManager = function () return { GetItemById = function (_, id) return ITEM_DB[id]; end }; end,
+    GetResourceManager = function () return { GetItemById = function (_, id) return ITEM_DB[id]; end, GetString = function (_, tbl, id) if (tbl == 'keyitems.names') then return KI_NAMES[id]; end return nil; end }; end,
     GetChatManager = function () return { ParseAutoTranslate = function (_, s) return s; end }; end,
 };
 
@@ -115,6 +136,22 @@ dofile('whohas.lua');
 local function present() events['d3d_present'](); end
 local function packet(id, data) events['packet_in']({ id = id, data = data or string.rep('\0', 256) }); end
 local function cmd(s) events['command']({ command = s }); end
+-- Delivery Box result packet (0x4B) as the server builds it: control form (0x14 bytes) when no item
+-- is given, full form (0x58 bytes) with ItemNo at 0x30 and Stack at 0x38 otherwise.
+local function dbox_packet(command, box, slot, result, id, count)
+    local size = (id ~= nil) and 0x58 or 0x14;
+    local p = {};
+    for i = 1, size do p[i] = 0; end
+    p[0x01] = 0x4B; p[0x02] = size / 2;
+    p[0x05] = command; p[0x06] = box; p[0x07] = slot; p[0x0D] = result;
+    if (id ~= nil) then
+        p[0x31] = id % 256; p[0x32] = math.floor(id / 256) % 256;
+        p[0x39] = count % 256; p[0x3A] = math.floor(count / 256) % 256; p[0x3B] = math.floor(count / 65536) % 256; p[0x3C] = math.floor(count / 16777216) % 256;
+    end
+    local s = {};
+    for i = 1, size do s[i] = string.char(p[i]); end
+    return table.concat(s);
+end
 
 -- Character A: fire crystals in inventory + safe, harness in locker
 CONTAINERS = { [0] = { [0] = { Id = 65535, Count = 5000 }, [1] = { Id = 4096, Count = 12 } }, [1] = { [1] = { Id = 4096, Count = 7 }, [2] = { Id = 29315, Count = 1, Extra = string.char(0x03) .. string.rep('\0', 27) }, [3] = { Id = 14059, Count = 1 } }, [4] = { [1] = { Id = 12345, Count = 1 }, [2] = { Id = 12511, Count = 1 } } };
@@ -132,12 +169,21 @@ offset = 5; present();
 assert(ashita.fs.exists('./fakeinstall/config/addons/whohas/chars/Alpha.lua'), 'snapshot not written after ready');
 real_print(io.open('./fakeinstall/config/addons/whohas/chars/Alpha.lua'):read('*a'));
 
--- Character B logs in (simulate by switching char + inventory)
+-- Character B logs in (simulate by switching char + inventory). Bravo has the Fighter's Armor set
+-- banked at the Armor Depository (claim slip key item 654).
 CHAR = { Name = 'Bravo', ServerId = 222 };
+KEY_ITEMS = { [654] = true };
 CONTAINERS = { [0] = { [0] = { Id = 65535, Count = 5 }, [2] = { Id = 4096, Count = 3 } }, [8] = { [0] = { Id = 12345, Count = 1 } }, [5] = { [7] = { Id = 4509, Count = 12 } }, [4] = { [0] = { Id = 29315, Count = 1, Extra = string.rep('\0', 6) .. string.char(0x80) .. string.rep('\0', 21) }, [1] = { Id = 29318, Count = 1, Extra = string.char(0x01) .. string.rep('\0', 27) } }, [1] = { [5] = { Id = 15225, Count = 1 } } };
 packet(0x000B); packet(0x000A, string.rep('\0', 0x84) .. 'Bravo' .. string.rep('\0', 20)); packet(0x001D);
 offset = 15; COUNTER = 2; present(); offset = 18; present();
 assert(ashita.fs.exists('./fakeinstall/config/addons/whohas/chars/Bravo.lua'), 'Bravo snapshot missing');
+do
+    local f = io.open('./fakeinstall/config/addons/whohas/chars/Bravo.lua'):read('*a');
+    assert(f:find('claims = { 654 },', 1, true), 'claim slip not saved: ' .. f);
+    assert(not f:find('dbox', 1, true), 'dbox written before the box was ever opened');
+    local a = io.open('./fakeinstall/config/addons/whohas/chars/Alpha.lua'):read('*a');
+    assert(a:find('claims = { },', 1, true), 'empty claims not saved for Alpha: ' .. a);
+end
 
 -- Reload from disk and check lookups
 cmd('/whohas reload');
@@ -173,12 +219,37 @@ assert(joined:find('Safe x1 %(2 stored%)'), 'stored count on slip row missing');
 assert(joined:find('Alpha: 2 stored') and joined:find('Fighters Lorica, Fighters Mask'), 'slip contents missing');
 assert(joined:find('Bravo: 1 stored') and joined:find('Wyrm Armet'), 'Bravo slip contents missing');
 assert(joined:find('PushTextWrapPos') and joined:find('PopTextWrapPos'), 'wrap push/pop unbalanced');
--- Variants: highlighting the NQ Fighters Mask must flag the +1 Bravo holds loose in Safe
+-- Variants: highlighting the NQ Fighters Mask must flag the +1 Bravo holds loose in Safe. The NQ
+-- itself is also banked in Bravo's Armor Depository set, so OWNED counts Locker + slip + depository.
 SELECTED = 12511; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
 real_print(joined);
-assert(joined:find('OWNED x2'), 'owned status missing (expected x2: Locker + slip copy)');
+assert(joined:find('OWNED x3'), 'owned status missing (expected x3: Locker + slip copy + Armor Depository)');
+assert(joined:find("Armor Depository %(Fighter's armor%)"), 'depository row missing (key item name should drop "claim slip"): ' .. joined);
 assert(joined:find('%+1 owned x1'), '+1 flag missing');
 assert(joined:find('Fgtr. Mask %+1') and joined:find('Bravo %(Safe x1%)'), 'variant line missing');
+-- Set progress: Alpha holds 2 of 5 Fighter's pieces (mask in Locker + slip, lorica on slip), Bravo has it banked.
+assert(joined:find("Armor Depository set: Fighter's armor") and joined:find('5 pieces: Head, Body, Hands, Legs, Feet; 500 gil'), 'set header missing: ' .. joined);
+assert(joined:find('Alpha: 2/5, missing Hands, Legs, Feet'), 'Alpha set progress wrong: ' .. joined);
+assert(joined:find('Bravo: banked %(claim slip%)') and not joined:find('plus'), 'Bravo banked line wrong: ' .. joined);
+-- Reverse: the +1 shows the NQ as owned x3 (depository copy included).
+SELECTED = 15225; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(joined:find('NQ owned x3') and joined:find("Bravo %(Armor Depository %(Fighter's armor%)%)"), 'NQ variant via depository missing: ' .. joined);
+-- Toggles: sets off drops the depository copy and the set section, setfit off drops only the section.
+cmd('/whohas sets off'); SELECTED = 12511; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(joined:find('OWNED x2') and not joined:find('Armor Depository %('), 'sets off still shows depository row: ' .. joined);
+assert(joined:find('Armor Depository set:'), 'sets off should keep the set section');
+cmd('/whohas setfit off'); imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(not joined:find('Armor Depository set:'), 'setfit off still shows the set section');
+cmd('/whohas sets on'); cmd('/whohas setfit on');
+assert(whohas_settings_probe().show_sets == true and whohas_settings_probe().show_set_fit == true, 'set toggles not saved');
+-- A set nobody has anything of (Argent, label from armorsets.lua since the client has no name for it).
+SELECTED = 11310; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(joined:find('Armor Depository set: Argent Attire') and joined:find('2 pieces: Body, Legs; 600 gil') and joined:find('No character holds any piece'), 'empty set section wrong: ' .. joined);
+-- /whohas sets lists banked sets with their pieces; /whohas find reaches banked pieces.
+print_log = {}; cmd('/whohas sets'); joined = table.concat(print_log, '\n');
+assert(joined:find("Bravo: Fighter's armor %(Fighters Mask, Fighters Lorica, Fighters Mufflers, Fighters Cuisses, Fighters Leggings; 500 gil to withdraw%)"), '/whohas sets output wrong: ' .. joined);
+print_log = {}; cmd('/whohas find mufflers'); joined = table.concat(print_log, '\n');
+assert(joined:find("Fighters Mufflers.-x1 on Bravo.-%(Armor Depository %(Fighter's armor%)%)"), 'find did not reach the depository: ' .. joined);
 -- Abyss Burgeonet (NQ) is owned by nobody, but the +1 sits on Bravo's Storage Slip 07
 SELECTED = 15072; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
 real_print(joined);
@@ -208,6 +279,57 @@ cmd('/whohas debug');
 SELECTED = 12008; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
 assert(joined:find('Fits Storage Slip 08') and joined:find('no character has this slip') and joined:find('not sold on this server'), 'fits/no-holder text missing: ' .. joined);
 cmd('/whohas find fighters'); cmd('/whohas slip'); cmd('/whohas slip 4'); cmd('/whohas slip 99'); cmd('/whohas slipfit off'); cmd('/whohas slipfit on'); cmd('/whohas slipitems off'); cmd('/whohas slipitems on');
+
+-- Delivery Box: the server lists the inbox when it opens (PostOpen, then Work for slots 0-7).
+-- Bravo's inbox: 12 Distilled Water, a Scorpion Harness, 5000 gil (ignored), the rest empty.
+print_log = {}; cmd('/whohas dbox'); assert(table.concat(print_log, '\n'):find('No Delivery Box contents on file'), 'dbox should be empty before the box is opened');
+packet(0x004B, dbox_packet(0x0E, 1, 0xFF, 1));
+packet(0x004B, dbox_packet(0x01, 1, 0, 1, 4509, 12));
+packet(0x004B, dbox_packet(0x01, 1, 1, 1, 12345, 1));
+packet(0x004B, dbox_packet(0x01, 1, 2, 1, 65535, 5000));
+for slot = 3, 7 do packet(0x004B, dbox_packet(0x01, 1, slot, 1, 0, 0)); end
+packet(0x004B, dbox_packet(0x01, 2, 0, 1, 4096, 99));   -- outgoing box: ignored
+packet(0x004B, dbox_packet(0x05, 1, 0xFF, 1));          -- Check (control form): ignored
+offset = offset + 5; present();
+do
+    local bf = io.open('./fakeinstall/config/addons/whohas/chars/Bravo.lua'):read('*a');
+    assert(bf:find('dbox = { seen = %d+, items = { %[4509%] = 12, %[12345%] = 1 } }'), 'dbox not saved: ' .. bf);
+end
+SELECTED = 12345; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(joined:find('Wardrobe x1, Delivery Box x1') and joined:find('OWNED x3'), 'delivery box row missing: ' .. joined);
+-- Taking the harness out (Get, result 1) empties the slot; a failed Get (inventory full, 0xB9) does not.
+packet(0x004B, dbox_packet(0x0A, 1, 0, 0xB9, 4509, 12));
+packet(0x004B, dbox_packet(0x0A, 1, 1, 1, 12345, 1));
+offset = offset + 5; present();
+SELECTED = 12345; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(not joined:find('Delivery Box') and joined:find('OWNED x2'), 'taken item still in delivery box: ' .. joined);
+-- A new delivery lands in slot 3 (Recv: a result-2 notice without an item, then the item with result 1).
+packet(0x004B, dbox_packet(0x06, 1, 3, 2));
+packet(0x004B, dbox_packet(0x06, 1, 3, 1, 4096, 3));
+offset = offset + 5; present();
+SELECTED = 4096; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(joined:find('Inventory x3, Delivery Box x3'), 'received item missing from delivery box: ' .. joined);
+assert(joined:find('Total: 25 across 2 characters'), 'total should include the delivery box: ' .. joined);
+print_log = {}; cmd('/whohas dbox'); joined = table.concat(print_log, '\n');
+assert(joined:find('Bravo: 2 item%(s%) in the Delivery Box, seen just now: Distilled Water x12, Fire Crystal x3'), '/whohas dbox output wrong: ' .. joined);
+print_log = {}; cmd('/whohas find water'); joined = table.concat(print_log, '\n');
+assert(joined:find('Distilled Water.-x12 on Bravo.-%(Delivery Box%)') and joined:find('Distilled Water.-x12 on Bravo.-%(Satchel x12%)'), 'find did not reach the delivery box: ' .. joined);
+cmd('/whohas dbox off'); SELECTED = 4096; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
+assert(not joined:find('Delivery Box') and joined:find('Total: 22 across 2 characters'), 'dbox off still counts the delivery box: ' .. joined);
+cmd('/whohas dbox on');
+assert(whohas_settings_probe().show_dbox == true, 'dbox toggle not saved');
+-- Returning the water to its sender (Reject, result 1) and clearing slot 3 empty the inbox.
+packet(0x004B, dbox_packet(0x09, 1, 0, 2, 4509, 12)); packet(0x004B, dbox_packet(0x09, 1, 0, 1, 4509, 12));
+packet(0x004B, dbox_packet(0x0B, 1, 3, 1, 4096, 3));
+offset = offset + 5; present();
+print_log = {}; cmd('/whohas dbox'); joined = table.concat(print_log, '\n');
+assert(joined:find('Bravo: 0 item%(s%) in the Delivery Box'), 'inbox should be empty: ' .. joined);
+-- Put the water back for the persistence checks further down, and make sure a short or odd packet is harmless.
+packet(0x004B, dbox_packet(0x06, 1, 0, 1, 4509, 12));
+packet(0x004B, string.rep('\0', 5)); packet(0x004B, dbox_packet(0x01, 1, 9, 1, 4096, 1));
+offset = offset + 5; present();
+print_log = {}; cmd('/whohas dbox'); assert(table.concat(print_log, '\n'):find('Distilled Water x12'), 'water not back in the inbox');
+cmd('/whohas debug');
 
 -- Server toggle: slip 05 bit 54 is a different item in the retail order, and retail sells slip 08.
 CONTAINERS[1][9] = { Id = 29316, Count = 1, Extra = string.rep('\0', 6) .. string.char(0x20) .. string.rep('\0', 21) };
@@ -269,6 +391,7 @@ local function restart(mode)
     package.loaded['slips'] = nil;
     dofile('whohas.lua');
     CHAR = { Name = 'Charlie', ServerId = 333 };
+    KEY_ITEMS = {};
     CONTAINERS = { [0] = { [0] = { Id = 65535, Count = 1 }, [1] = { Id = 4509, Count = 2 } } };
     LOGIN = 2;
     events['load']();
@@ -278,6 +401,13 @@ local function restart(mode)
     local joined = table.concat(print_log, '\n');
     assert(joined:find('Bravo'), 'after restart (' .. mode .. ') Bravo missing from list: ' .. joined);
     assert(loaded_line:find('Loaded 1 character file'), 'load message wrong (' .. mode .. '): ' .. tostring(loaded_line));
+    -- Claim slips and the Delivery Box come back from Bravo's file.
+    MENU_NAME = 'menu    inventor'; SELECTED = 12511; imgui_log = {}; events['d3d_present']();
+    joined = table.concat(imgui_log, '\n');
+    assert(joined:find("Armor Depository %(Fighter's armor%)"), 'claims lost after restart (' .. mode .. '): ' .. joined);
+    SELECTED = 4509; imgui_log = {}; events['d3d_present']();
+    joined = table.concat(imgui_log, '\n');
+    assert(joined:find('Delivery Box x12'), 'delivery box lost after restart (' .. mode .. '): ' .. joined);
     print_log = {};
     events['command']({ command = '/whohas files' });
     real_print(table.concat(print_log, '\n'));
@@ -340,4 +470,23 @@ print_log = {};
 events['command']({ command = '/whohas forget ../../evil' });
 assert(table.concat(print_log, '\n'):find('No stored data'), 'forget accepted a path-like name');
 os.remove('./fakeinstall/config/addons/whohas/chars/Mallory.lua');
+-- A file whose claims / dbox fields are the wrong shape keeps only the well-formed parts.
+local td = io.open('./fakeinstall/config/addons/whohas/chars/Delta.lua', 'w');
+td:write("return { name = 'Delta', items = { [12345] = { [0] = 1 } }, slips = {}, claims = { 'x', -5, 654, 1059, 77 },"
+    .. " dbox = { seen = 'q', items = { [12345] = 'n', [-1] = 2, [4096] = 2, x = 1 } } }\n");
+td:close();
+events = {};
+ashita.events.register = function (name, alias, fn) events[name] = fn; end;
+package.loaded['slips'] = nil;
+dofile('whohas.lua');
+CHAR = { Name = 'Charlie', ServerId = 333 }; KEY_ITEMS = {}; LOGIN = 2;
+events['load']();
+print_log = {}; events['command']({ command = '/whohas sets' }); joined = table.concat(print_log, '\n');
+assert(joined:find("Delta: Fighter's armor") and joined:find('Delta: Argent Attire %(Argent Coat, Argent Pants; 600 gil'), 'Delta claims not loaded: ' .. joined);
+print_log = {}; events['command']({ command = '/whohas dbox' }); joined = table.concat(print_log, '\n');
+assert(joined:find('Delta: 1 item%(s%) in the Delivery Box, seen at an unknown time: Fire Crystal x2') and not joined:find('Scorpion'), 'Delta dbox not sanitised: ' .. joined);
+SELECTED = 11310; imgui_log = {}; events['d3d_present'](); joined = table.concat(imgui_log, '\n');
+assert(joined:find('Delta: banked %(claim slip%)') and joined:find('Armor Depository %(Argent Attire%)'), 'Delta banked set missing: ' .. joined);
+events['command']({ command = '/whohas forget delta' });
+LOGIN = 0; events['unload']();
 real_print('ALL HARNESS CHECKS PASSED');

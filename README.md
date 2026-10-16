@@ -32,9 +32,27 @@ The box opens with a status line: green `OWNED xN` when any character has the it
 
 `/whohas variants off` hides all of it. If `hqpairs.lua` is missing the addon still loads and says so; only the name-based matching runs.
 
+## Armor Depository (full sets)
+
+The Armor Depository NPCs take a complete NQ armor set (artifact, relic, a few crafted sets) and hand back a claim slip key item; paying the fee returns the pieces. whohas records which claim slips each character holds at snapshot time, so a banked piece shows up in the box as `Armor Depository (Fighter's armor)` on that character's row, counts toward `OWNED`, and is found by `/whohas find`. `armorsets.lua`, generated from LandSandBoat data, lists the 89 sets with their pieces and withdrawal costs.
+
+Highlight any piece of a storable set and the box adds a section such as:
+
+```
+Armor Depository set: Fighter's armor (5 pieces: Head, Body, Hands, Legs, Feet; 500 gil to withdraw)
+  Alpha: 2/5, missing Hands, Legs, Feet
+  Bravo: banked (claim slip)
+```
+
+so you can see at a glance who is close to a complete set worth banking, and who already has it stored. Only NQ pieces count (the depository does not take +1 gear). `/whohas sets` lists every banked set on file; `/whohas sets off` hides the depository rows and `/whohas setfit off` hides the progress section. If `armorsets.lua` is missing the addon still loads and says so.
+
+## Delivery Box
+
+Items waiting in a character's Delivery Box inbox are recorded from the packets the server sends while the box is open (the addon only reads them; it never sends anything). They show up as `Delivery Box x2` on that character's row, count toward `OWNED`, and are found by `/whohas find`. The record is as fresh as the last time that character opened the box; taking an item out, returning it to the sender or deleting it updates the record straight away. Gil in the box is ignored. `/whohas dbox` lists what is on file for every character and when it was last seen; `/whohas dbox off` hides it from the box.
+
 ## Install
 
-1. Copy the `whohas` folder into `<Ashita>\addons\` so you end up with `addons\whohas\whohas.lua`, `slips.lua` and `hqpairs.lua` side by side. A zip downloaded from GitHub unpacks as `whohas-main`; rename that folder to `whohas` first.
+1. Copy the `whohas` folder into `<Ashita>\addons\` so you end up with `addons\whohas\whohas.lua`, `slips.lua`, `hqpairs.lua` and `armorsets.lua` side by side. A zip downloaded from GitHub unpacks as `whohas-main`; rename that folder to `whohas` first.
 2. `/addon load whohas` (or add it to your `default.txt`).
 3. Log in on each of your characters once. Each login writes that character's file. From then on the file updates automatically whenever that character's inventory changes.
 
@@ -62,6 +80,11 @@ The box opens with a status line: green `OWNED xN` when any character has the it
 | `/whohas slipitems on` / `off` | List slip contents when a slip is selected |
 | `/whohas server horizon` / `retail` | Which server you play on: storage slip bit order and the Porter Moogle shop list |
 | `/whohas variants on` / `off` | Show +1 / -1 / NQ versions of the selected item that anyone holds |
+| `/whohas sets` | List the sets each character has banked at the Armor Depository |
+| `/whohas sets on` / `off` | Show pieces banked at the Armor Depository in the box |
+| `/whohas setfit on` / `off` | Show set progress per character when a piece of a storable set is selected |
+| `/whohas dbox` | List what is waiting in each character's Delivery Box, as last seen |
+| `/whohas dbox on` / `off` | Show items waiting in the Delivery Box in the box |
 | `/whohas forget <name>` | Delete the stored data for a character |
 | `/whohas files` | Show the data folder and exactly which character files are on disk (use this if data seems to vanish between sessions) |
 | `/whohas reload` | Re-read the character files from disk |

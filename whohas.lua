@@ -22,6 +22,12 @@
 *     or buying a piece you already have or have already upgraded. hqpairs.lua extends that to
 *     NQ/HQ pairs whose names differ (Crimson -> Blood, Koenig -> Kaiser, Adaman -> Armada), the
 *     cursed piece and abjuration behind each sky/sea item, and a few drop pairs (Leaping -> Bounding).
+*   - Armor Depository: a full NQ set handed to the depository NPC becomes a claim slip key item.
+*     Each snapshot records which claim slips the character holds (armorsets.lua lists the 89 sets
+*     and their pieces), so banked pieces show up as "Armor Depository (Fighter's armor)", and
+*     selecting any piece of a storable set shows how close each character is to a complete set.
+*   - Delivery Box: the packets the server sends while the inbox is open are read (never sent),
+*     so items waiting in the Delivery Box show up as "Delivery Box x2" until they are taken out.
 *   - The addon is read-only: it never sends packets, moves items, or automates anything.
 *
 * Commands:
@@ -48,6 +54,11 @@
 *   /whohas slipitems on | off When a slip is selected, list what is stored on it.
 *   /whohas server horizon | retail  Which server you play on: selects the slip bit order and shop list.
 *   /whohas variants on | off  Show other versions (+1, -1, NQ) of the selected item that anyone holds.
+*   /whohas sets               List the sets each character has banked at the Armor Depository.
+*   /whohas sets on | off      Show pieces banked at the Armor Depository in the box.
+*   /whohas setfit on | off    When a piece of a storable set is selected, show set progress per character.
+*   /whohas dbox               List what is waiting in each character's Delivery Box (as last seen).
+*   /whohas dbox on | off      Show items waiting in the Delivery Box in the box.
 *   /whohas forget <name>      Delete the stored data for a character.
 *   /whohas debug              Print the selected item id, index, and menu name.
 *   /whohas help               Show this list.
@@ -55,7 +66,7 @@
 
 addon.name    = 'whohas';
 addon.author  = 'Frette';
-addon.version = '1.4.1';
+addon.version = '1.5.0';
 addon.desc    = 'Shows which of your characters hold the selected item, and how many, across all storage.';
 addon.link    = '';
 
@@ -69,6 +80,13 @@ local slips    = require('slips');
 local hqpairs_ok, hqpairs = pcall(require, 'hqpairs');
 if (not hqpairs_ok or type(hqpairs) ~= 'table' or type(hqpairs.related) ~= 'function') then
     hqpairs = nil;
+end
+-- Optional: Armor Depository sets (armorsets.lua, generated from LandSandBoat data). Without it
+-- claim slips are not tracked.
+local armorsets_ok, armorsets = pcall(require, 'armorsets');
+if (not armorsets_ok or type(armorsets) ~= 'table' or type(armorsets.sets) ~= 'table' or type(armorsets.by_ki) ~= 'table'
+    or type(armorsets.by_item) ~= 'table' or type(armorsets.pieces) ~= 'function') then
+    armorsets = nil;
 end
 
 -------------------------------------------------------------------------------
@@ -89,6 +107,9 @@ local defaults = T{
     show_slip_fit     = true,   -- show which slip the selected item can be stored on
     show_slip_items   = true,   -- when a slip is selected, list what this character has stored on it
     show_variants     = true,   -- show +1 / -1 / NQ versions of the selected item that any character holds
+    show_sets         = true,   -- show pieces banked at the Armor Depository (claim slip key items)
+    show_set_fit      = true,   -- when a piece of a storable set is selected, show set progress per character
+    show_dbox         = true,   -- show items waiting in the Delivery Box (as last seen)
     locked            = false,
     opacity           = 0.85,
     pos_x             = 100,
@@ -147,7 +168,7 @@ end
 local whohas = T{
     settings     = settings.load(defaults),
     data_path    = nil,
-    chars        = { },      -- name -> { name, server_id, updated, items = { [id] = { [cid] = count } } }
+    chars        = { },      -- name -> { name, server_id, updated, items = { [id] = { [cid] = count } }, slips, claims, dbox }
     me           = nil,      -- name of the logged-in character
     ready        = false,    -- inventory fully loaded for the logged-in character
     dirty        = false,
@@ -162,6 +183,9 @@ local whohas = T{
     fits         = { },      -- slips the selected item can be stored on: { slip_id, name, sold, holders = { {name, where} } }
     slip_rows    = { },      -- when the selected item is a slip: { {name, count, names = { ... }} }
     variants     = { },      -- other versions (+1, -1, NQ) of the selected item: { {id, name, rows, total} }
+    set_rows     = { },      -- Armor Depository sets the selected item belongs to: { {set, label, count, slots, cost, rows} }
+    dbox_slots   = { },      -- Delivery Box inbox slots 0-7 as described by the server: { [slot] = { id, count } }
+    dbox_live    = nil,      -- { name, seen, items = { [id] = count } } once the inbox has been listed this session
     owned_all    = 0,        -- copies of the selected item across every character, current included
     name_index   = nil,      -- base name -> { [item id] = display name } for every item any character holds
     name_index_version = -1,
@@ -211,6 +235,36 @@ local function item_display_name(id)
         return item.Name[1];
     end
     return 'Item #' .. tostring(id);
+end
+
+-- Name of an Armor Depository set: the client's key item name with "claim slip" removed when the
+-- client has one, otherwise the label generated into armorsets.lua.
+local set_labels = { };
+local function set_label(s)
+    local cached = set_labels[s.ki];
+    if (cached ~= nil) then return cached; end
+    local label = s.label or ('Set #' .. tostring(s.id));
+    local ok, name = pcall(function () return AshitaCore:GetResourceManager():GetString('keyitems.names', s.ki); end);
+    if (ok and type(name) == 'string' and #name > 1) then
+        local stripped = (name:gsub('%s*[Cc]laim%s+[Ss]lip', ''));
+        stripped = (stripped:gsub('^%s+', ''));
+        stripped = (stripped:gsub('%s+$', ''));
+        if (#stripped > 0) then label = stripped; end
+    end
+    set_labels[s.ki] = label;
+    return label;
+end
+
+-- Known character names, the logged-in character first, then alphabetical.
+local function sorted_names()
+    local names = { };
+    for name, _ in pairs(whohas.chars) do table.insert(names, name); end
+    table.sort(names, function (a, b)
+        if (a == whohas.me) then return true; end
+        if (b == whohas.me) then return false; end
+        return a < b;
+    end);
+    return names;
 end
 
 -- "Fighter's Mask +1" / "Abyss Burgeonet -1" -> "fighter's mask" / "abyss burgeonet", so NQ, HQ (+1)
@@ -372,11 +426,27 @@ local function serialize_char(c)
         for _, v in ipairs(s.items or { }) do table.insert(ids2, tostring(v)); end
         table.insert(out, string.format('        [%d] = { container = %d, items = { %s } },\n', sid, s.container or 0, table.concat(ids2, ', ')));
     end
-    table.insert(out, '    },\n};\n');
+    table.insert(out, '    },\n');
+    -- Armor Depository claim slips held (key item ids).
+    local kis = { };
+    for _, ki in ipairs(c.claims or { }) do table.insert(kis, tostring(ki)); end
+    table.insert(out, string.format('    claims = {%s},\n', (#kis > 0) and (' ' .. table.concat(kis, ', ') .. ' ') or ' '));
+    -- Delivery Box inbox as last seen: item id -> count.
+    if (c.dbox ~= nil and type(c.dbox.items) == 'table') then
+        local dids = { };
+        for id, _ in pairs(c.dbox.items) do table.insert(dids, id); end
+        table.sort(dids);
+        local parts = { };
+        for _, id in ipairs(dids) do table.insert(parts, string.format('[%d] = %d', id, c.dbox.items[id])); end
+        table.insert(out, string.format('    dbox = { seen = %d, items = { %s } },\n', c.dbox.seen or 0, table.concat(parts, ', ')));
+    end
+    table.insert(out, '};\n');
     return table.concat(out);
 end
 
--- Builds c.slip_index: item id -> list of { slip = slip_id, container = cid } for items stored on slips.
+-- Builds c.slip_index: item id -> list of { slip = slip_id, container = cid } for items stored on slips,
+-- c.claim_set: claim slip key item id -> true, and c.banked: item id -> list of Armor Depository sets
+-- this character has banked that include the item.
 local function index_char(c)
     local idx = { };
     for sid, s in pairs(c.slips or { }) do
@@ -387,6 +457,23 @@ local function index_char(c)
         end
     end
     c.slip_index = idx;
+    local claim_set = { };
+    local banked = { };
+    for _, ki in ipairs(c.claims or { }) do
+        claim_set[ki] = true;
+        local s = (armorsets ~= nil) and armorsets.by_ki[ki] or nil;
+        if (s ~= nil) then
+            for _, pid in ipairs(s.pieces) do
+                if (pid ~= 0) then
+                    local t = banked[pid];
+                    if (t == nil) then t = { }; banked[pid] = t; end
+                    table.insert(t, s);
+                end
+            end
+        end
+    end
+    c.claim_set = claim_set;
+    c.banked = banked;
     return c;
 end
 
@@ -480,6 +567,23 @@ local function load_char_file(path)
     local ok, data = pcall(run_data_file, path);
     if (ok and type(data) == 'table' and valid_name(data.name) and type(data.items) == 'table') then
         if (type(data.slips) ~= 'table') then data.slips = { }; end
+        -- Files written by 1.4.1 and earlier carry no claims or dbox; later files are checked field by field.
+        local claims = { };
+        if (type(data.claims) == 'table') then
+            for _, ki in ipairs(data.claims) do
+                if (type(ki) == 'number' and ki > 0) then table.insert(claims, ki); end
+            end
+        end
+        data.claims = claims;
+        if (type(data.dbox) == 'table' and type(data.dbox.items) == 'table') then
+            local items = { };
+            for id, n in pairs(data.dbox.items) do
+                if (type(id) == 'number' and type(n) == 'number' and id > 0 and n > 0) then items[id] = n; end
+            end
+            data.dbox = { seen = tonumber(data.dbox.seen) or 0, items = items };
+        else
+            data.dbox = nil;
+        end
         return index_char(data);
     end
     return nil;
@@ -574,6 +678,20 @@ local function scan_live()
     return items, slots, found_slips;
 end
 
+-- Armor Depository claim slips (key items) the logged-in character holds, as key item ids.
+local function scan_claims()
+    local out = { };
+    if (armorsets == nil) then return out; end
+    local ok, player = pcall(function () return AshitaCore:GetMemoryManager():GetPlayer(); end);
+    if (not ok or player == nil) then return out; end
+    for _, s in ipairs(armorsets.sets) do
+        local ok2, has = pcall(function () return player:HasKeyItem(s.ki); end);
+        if (ok2 and has == true) then table.insert(out, s.ki); end
+    end
+    table.sort(out);
+    return out;
+end
+
 local function snapshot(announce)
     local name, sid = get_me();
     if (name == nil) then
@@ -585,7 +703,16 @@ local function snapshot(announce)
         if (announce) then msg_err('Inventory looks empty or not loaded yet; nothing saved.'); end
         return false;
     end
-    local c = index_char({ name = name, server_id = sid, updated = os.time(), items = items, slips = found_slips });
+    local claims = scan_claims();
+    -- The Delivery Box is only described by the server while it is open: keep what was seen this
+    -- session, else what the previous snapshot of this character had.
+    local dbox = nil;
+    if (whohas.dbox_live ~= nil and whohas.dbox_live.name == name) then
+        dbox = { seen = whohas.dbox_live.seen, items = whohas.dbox_live.items };
+    elseif (whohas.chars[name] ~= nil) then
+        dbox = whohas.chars[name].dbox;
+    end
+    local c = index_char({ name = name, server_id = sid, updated = os.time(), items = items, slips = found_slips, claims = claims, dbox = dbox });
     whohas.chars[name] = c;
     whohas.me = name;
     whohas.data_version = whohas.data_version + 1;
@@ -595,7 +722,9 @@ local function snapshot(announce)
         for _ in pairs(items) do unique = unique + 1; end
         local nslips, nstored = 0, 0;
         for _, s in pairs(found_slips) do nslips = nslips + 1; nstored = nstored + #s.items; end
-        msg_ok(string.format('Snapshot saved for %s: %d slots, %d unique items, %d slip(s) holding %d item(s).', name, slots, unique, nslips, nstored));
+        local ndbox = 0;
+        for _, n in pairs((dbox or { }).items or { }) do ndbox = ndbox + n; end
+        msg_ok(string.format('Snapshot saved for %s: %d slots, %d unique items, %d slip(s) holding %d item(s), %d set(s) at the Armor Depository, %d item(s) in the Delivery Box.', name, slots, unique, nslips, nstored, #claims, ndbox));
     end
     return saved;
 end
@@ -667,6 +796,24 @@ local function build_rows(id, include_current)
                 for _, s in ipairs(on_slips) do
                     char_total = char_total + 1;
                     table.insert(where, string.format('%s (%s)', slips.name(s.slip), container_name(s.container)));
+                end
+            end
+            -- Pieces banked at the Armor Depository (the set's claim slip key item).
+            if (whohas.settings.show_sets) then
+                local banked = (c.banked or { })[id];
+                if (banked ~= nil) then
+                    for _, s in ipairs(banked) do
+                        char_total = char_total + 1;
+                        table.insert(where, string.format('Armor Depository (%s)', set_label(s)));
+                    end
+                end
+            end
+            -- Items waiting in the Delivery Box, as last seen.
+            if (whohas.settings.show_dbox and c.dbox ~= nil and c.dbox.items ~= nil) then
+                local n = c.dbox.items[id];
+                if (n ~= nil and n > 0) then
+                    char_total = char_total + n;
+                    table.insert(where, string.format('Delivery Box x%d', n));
                 end
             end
             if (char_total > 0) then
@@ -756,6 +903,8 @@ local function rebuild_name_index()
         for _, sl in pairs(c.slips or { }) do
             for _, item_id in ipairs(sl.items or { }) do add(item_id); end
         end
+        for item_id, _ in pairs(c.banked or { }) do add(item_id); end
+        for item_id, _ in pairs((c.dbox or { }).items or { }) do add(item_id); end
     end
     whohas.name_index = idx;
     whohas.name_index_version = whohas.data_version;
@@ -802,6 +951,40 @@ local function build_variants(id)
     return out;
 end
 
+-- When the selected item is a piece of an Armor Depository set: how close each character is to the
+-- complete NQ set (pieces held loose or on slips), and who has the set banked already.
+local function build_set_rows(id)
+    local out = { };
+    if (armorsets == nil) then return out; end
+    local sets = armorsets.by_item[id];
+    if (sets == nil) then return out; end
+    local names = sorted_names();
+    for _, s in ipairs(sets) do
+        local pieces = armorsets.pieces(s);
+        local rows = { };
+        for _, name in ipairs(names) do
+            local c = whohas.chars[name];
+            local held = 0;
+            local missing = { };
+            for _, p in ipairs(pieces) do
+                if (c.items[p.id] ~= nil or (c.slip_index or { })[p.id] ~= nil) then
+                    held = held + 1;
+                else
+                    table.insert(missing, p.slot);
+                end
+            end
+            local banked = ((c.claim_set or { })[s.ki] == true);
+            if (held > 0 or banked) then
+                table.insert(rows, { name = name, held = held, missing = missing, banked = banked, current = (name == whohas.me) });
+            end
+        end
+        local slot_names = { };
+        for _, p in ipairs(pieces) do table.insert(slot_names, p.slot); end
+        table.insert(out, { set = s, label = set_label(s), count = #pieces, slots = table.concat(slot_names, ', '), cost = s.cost or 0, rows = rows });
+    end
+    return out;
+end
+
 local function refresh_rows(id)
     if (id ~= whohas.last_item or whohas.rows_version ~= whohas.data_version) then
         whohas.rows, whohas.total = build_rows(id);
@@ -810,6 +993,7 @@ local function refresh_rows(id)
         whohas.variants     = build_variants(id);
         whohas.fits         = build_fits(id);
         whohas.slip_rows    = build_slip_rows(id);
+        whohas.set_rows     = build_set_rows(id);
         whohas.last_item    = id;
         whohas.rows_version = whohas.data_version;
         whohas.item_name    = item_display_name(id);
@@ -823,7 +1007,8 @@ local function draw_box(id)
     refresh_rows(id);
     local has_fit = (whohas.settings.show_slip_fit and #whohas.fits > 0);
     local has_var = (whohas.settings.show_variants and #whohas.variants > 0);
-    if (#whohas.rows == 0 and not has_fit and not has_var and not whohas.settings.show_missing and not whohas.pinned) then return; end
+    local has_set = (whohas.settings.show_set_fit and #whohas.set_rows > 0);
+    if (#whohas.rows == 0 and not has_fit and not has_var and not has_set and not whohas.settings.show_missing and not whohas.pinned) then return; end
 
     local flags = bit.bor(
         ImGuiWindowFlags_NoTitleBar,
@@ -956,6 +1141,34 @@ local function draw_box(id)
             end
         end
 
+        -- The selected item belongs to an Armor Depository set: set progress per character.
+        if (has_set) then
+            imgui.Separator();
+            for _, sr in ipairs(whohas.set_rows) do
+                imgui.TextColored({ 0.6, 0.8, 1.0, 1.0 }, 'Armor Depository set: ' .. sr.label);
+                imgui.SameLine();
+                imgui.TextDisabled(string.format('(%d pieces: %s; %d gil to withdraw)', sr.count, sr.slots, sr.cost));
+                if (#sr.rows == 0) then
+                    imgui.TextDisabled('  No character holds any piece of this set.');
+                end
+                for _, r in ipairs(sr.rows) do
+                    local text;
+                    if (r.banked) then
+                        text = string.format('%s: banked (claim slip)%s', r.name, (r.held > 0) and string.format(', plus %d loose piece(s)', r.held) or '');
+                    elseif (#r.missing == 0) then
+                        text = string.format('%s: %d/%d, complete set ready to store', r.name, r.held, sr.count);
+                    else
+                        text = string.format('%s: %d/%d, missing %s', r.name, r.held, sr.count, table.concat(r.missing, ', '));
+                    end
+                    if (r.current) then
+                        imgui.TextColored({ 0.55, 1.0, 0.55, 1.0 }, '  ' .. text);
+                    else
+                        imgui.Text('  ' .. text);
+                    end
+                end
+            end
+        end
+
         -- The selected item is a storage slip: list what is stored on it.
         if (whohas.settings.show_slip_items and #whohas.slip_rows > 0) then
             imgui.Separator();
@@ -992,14 +1205,18 @@ local function find_items(text)
     local res = AshitaCore:GetResourceManager();
     local hits = { };
     local name_cache = { };
+    local function name_of(id)
+        local iname = name_cache[id];
+        if (iname == nil) then
+            local item = res:GetItemById(id);
+            iname = (item ~= nil and item.Name ~= nil and item.Name[1]) or '';
+            name_cache[id] = iname;
+        end
+        return iname;
+    end
     for cname, c in pairs(whohas.chars) do
         for id, per in pairs(c.items) do
-            local iname = name_cache[id];
-            if (iname == nil) then
-                local item = res:GetItemById(id);
-                iname = (item ~= nil and item.Name ~= nil and item.Name[1]) or '';
-                name_cache[id] = iname;
-            end
+            local iname = name_of(id);
             if (#iname > 0 and iname:lower():find(needle, 1, true)) then
                 local cids = { };
                 for cid, _ in pairs(per) do table.insert(cids, cid); end
@@ -1016,15 +1233,26 @@ local function find_items(text)
         -- Items stored on this character's storage slips.
         for sid, s in pairs(c.slips or { }) do
             for _, id in ipairs(s.items or { }) do
-                local iname = name_cache[id];
-                if (iname == nil) then
-                    local item = res:GetItemById(id);
-                    iname = (item ~= nil and item.Name ~= nil and item.Name[1]) or '';
-                    name_cache[id] = iname;
-                end
+                local iname = name_of(id);
                 if (#iname > 0 and iname:lower():find(needle, 1, true)) then
                     table.insert(hits, { item = iname, char = cname, count = 1, where = string.format('%s in %s', slips.name(sid), container_name(s.container or 0)) });
                 end
+            end
+        end
+        -- Pieces banked at the Armor Depository.
+        for id, sets in pairs(c.banked or { }) do
+            local iname = name_of(id);
+            if (#iname > 0 and iname:lower():find(needle, 1, true)) then
+                for _, s in ipairs(sets) do
+                    table.insert(hits, { item = iname, char = cname, count = 1, where = 'Armor Depository (' .. set_label(s) .. ')' });
+                end
+            end
+        end
+        -- Items waiting in the Delivery Box.
+        for id, n in pairs((c.dbox or { }).items or { }) do
+            local iname = name_of(id);
+            if (#iname > 0 and iname:lower():find(needle, 1, true)) then
+                table.insert(hits, { item = iname, char = cname, count = n, where = 'Delivery Box' });
             end
         end
     end
@@ -1116,6 +1344,9 @@ local function print_help()
     msg('  /whohas slipitems on|off Show slip contents when a slip is selected');
     msg('  /whohas server horizon|retail  Which server you play on (slip bit order, shop list)');
     msg('  /whohas variants on|off  Show +1 / -1 / NQ versions anyone holds');
+    msg('  /whohas sets [on|off] List Armor Depository sets on file, or show/hide banked pieces');
+    msg('  /whohas setfit on|off  Show set progress when a storable piece is selected');
+    msg('  /whohas dbox [on|off] List Delivery Box contents on file, or show/hide them');
     msg('  /whohas forget <name> Delete a character\'s data');
     msg('  /whohas debug         Show selected item + menu info');
 end
@@ -1436,6 +1667,76 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
         return;
     end
 
+    if (sub == 'sets' or sub == 'set') then
+        local v = on_off(args[3]);
+        if (v ~= nil) then
+            whohas.settings.show_sets = v;
+            whohas.data_version = whohas.data_version + 1;
+            settings.save();
+            msg(v and 'Showing pieces banked at the Armor Depository.' or 'Hiding Armor Depository pieces.');
+            return;
+        end
+        if (armorsets == nil) then
+            msg_err('armorsets.lua not found next to whohas.lua; Armor Depository sets are not tracked.');
+            return;
+        end
+        local lines = { };
+        for cname, c in pairs(whohas.chars) do
+            for _, ki in ipairs(c.claims or { }) do
+                local s = armorsets.by_ki[ki];
+                if (s ~= nil) then
+                    local labels = { };
+                    for _, p in ipairs(armorsets.pieces(s)) do table.insert(labels, item_display_name(p.id)); end
+                    table.insert(lines, { key = cname .. '|' .. set_label(s), text = string.format('%s: %s (%s; %d gil to withdraw)', cname, set_label(s), table.concat(labels, ', '), s.cost or 0) });
+                end
+            end
+        end
+        if (#lines == 0) then msg('No character has a set banked at the Armor Depository on file.'); return; end
+        table.sort(lines, function (a, b) return a.key < b.key; end);
+        msg(string.format('Armor Depository sets on file (%d):', #lines));
+        for _, l in ipairs(lines) do msg('  ' .. l.text); end
+        return;
+    end
+
+    if (sub == 'setfit') then
+        local v = on_off(args[3]);
+        if (v == nil) then msg_err('Usage: /whohas setfit on|off'); return; end
+        whohas.settings.show_set_fit = v;
+        whohas.data_version = whohas.data_version + 1;
+        settings.save();
+        msg(v and 'Showing set progress when a piece of a storable set is selected.' or 'Hiding set progress.');
+        return;
+    end
+
+    if (sub == 'dbox' or sub == 'delivery') then
+        local v = on_off(args[3]);
+        if (v ~= nil) then
+            whohas.settings.show_dbox = v;
+            whohas.data_version = whohas.data_version + 1;
+            settings.save();
+            msg(v and 'Showing items waiting in the Delivery Box.' or 'Hiding Delivery Box items.');
+            return;
+        end
+        local names = { };
+        for cname, c in pairs(whohas.chars) do
+            if (c.dbox ~= nil) then table.insert(names, cname); end
+        end
+        table.sort(names);
+        if (#names == 0) then
+            msg('No Delivery Box contents on file yet. Open the Delivery Box once on each character.');
+            return;
+        end
+        for _, cname in ipairs(names) do
+            local d = whohas.chars[cname].dbox;
+            local labels = { };
+            for id, n in pairs(d.items or { }) do table.insert(labels, string.format('%s x%d', item_display_name(id), n)); end
+            table.sort(labels);
+            local seen = ((d.seen or 0) > 0) and ('seen ' .. age_phrase(d.seen)) or 'seen at an unknown time';
+            msg(string.format('%s: %d item(s) in the Delivery Box, %s%s', cname, #labels, seen, (#labels > 0) and (': ' .. table.concat(labels, ', ')) or ''));
+        end
+        return;
+    end
+
     if (sub == 'debug') then
         local inv = AshitaCore:GetMemoryManager():GetInventory();
         local id = inv:GetSelectedItemId();
@@ -1454,6 +1755,17 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
         else
             msg('hqpairs: not loaded (hqpairs.lua missing); only +1 / -1 names are matched.');
         end
+        if (armorsets ~= nil) then
+            local sets = armorsets.by_item[id or 0] or { };
+            local parts = { };
+            for _, s in ipairs(sets) do table.insert(parts, set_label(s)); end
+            msg(string.format('armorsets: %d set(s) loaded; selected item belongs to: %s', #armorsets.sets, (#parts > 0) and table.concat(parts, ', ') or 'none'));
+        else
+            msg('armorsets: not loaded (armorsets.lua missing); Armor Depository sets are not tracked.');
+        end
+        local nslots = 0;
+        for _ in pairs(whohas.dbox_slots) do nslots = nslots + 1; end
+        msg(string.format('Delivery Box: %d slot(s) seen this session%s', nslots, (whohas.dbox_live ~= nil) and string.format(' (%s, %s)', tostring(whohas.dbox_live.name), age_phrase(whohas.dbox_live.seen)) or ''));
         return;
     end
 
@@ -1498,6 +1810,57 @@ ashita.events.register('packet_in', 'whohas_packet_in_cb', function (e)
         if (whohas.ready) then
             whohas.dirty = true;
             whohas.dirty_at = os.time();
+        end
+        return;
+    end
+
+    if (e.id == 0x004B) then
+        -- Delivery Box result. The server describes one inbox slot per packet: Work (0x01) for each
+        -- of the 8 slots when the box is opened, Recv (0x06) when a new item lands in a slot, and
+        -- Get (0x0A), Clear (0x0B) or Reject (0x09) with result 1 when a slot is emptied. Only the
+        -- incoming box (BoxNo 1) is tracked; the outgoing box is not storage.
+        local data = e.data;
+        if (type(data) ~= 'string' or #data < 0x14) then return; end
+        local command = data:byte(0x05);
+        local box = data:byte(0x06);
+        local slot = data:byte(0x07);
+        local result = data:byte(0x0D);
+        if (box ~= 1) then return; end
+        if (command == 0x0E) then
+            -- PostOpen: the inbox is about to be listed from scratch.
+            whohas.dbox_slots = { };
+            return;
+        end
+        if (slot == nil or slot > 7) then return; end
+        local changed = false;
+        if ((command == 0x01 or command == 0x06) and result == 1) then
+            local id, count = 0, 0;
+            if (#data >= 0x3C) then
+                local b1, b2 = data:byte(0x31, 0x32);
+                id = b1 + b2 * 256;
+                local c1, c2, c3, c4 = data:byte(0x39, 0x3C);
+                count = c1 + c2 * 256 + c3 * 65536 + c4 * 16777216;
+            end
+            if (id > 0 and id ~= GIL_ID) then
+                whohas.dbox_slots[slot] = { id = id, count = math.max(count, 1) };
+            else
+                whohas.dbox_slots[slot] = nil;
+            end
+            changed = true;
+        elseif ((command == 0x0A or command == 0x0B or command == 0x09) and result == 1) then
+            whohas.dbox_slots[slot] = nil;
+            changed = true;
+        end
+        if (changed) then
+            local items = { };
+            for _, s in pairs(whohas.dbox_slots) do
+                items[s.id] = (items[s.id] or 0) + s.count;
+            end
+            whohas.dbox_live = { name = whohas.me or get_me(), seen = os.time(), items = items };
+            if (whohas.ready) then
+                whohas.dirty = true;
+                whohas.dirty_at = os.time();
+            end
         end
         return;
     end
@@ -1556,6 +1919,9 @@ ashita.events.register('load', 'whohas_load_cb', function ()
     msg(string.format('Loaded %d character file(s) from %s. /whohas help for commands.', n, tostring(whohas.data_path)));
     if (hqpairs == nil) then
         msg_err('hqpairs.lua not found next to whohas.lua; NQ/HQ pairs with different names (Crimson/Blood, cursed, abjurations) will not be matched.');
+    end
+    if (armorsets == nil) then
+        msg_err('armorsets.lua not found next to whohas.lua; Armor Depository sets will not be tracked.');
     end
 end);
 

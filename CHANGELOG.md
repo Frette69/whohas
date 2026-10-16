@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- Armor Depository: each snapshot records the claim slip key items the character holds, so pieces banked there show as `Armor Depository (Fighter's armor)`, count toward `OWNED`, feed the variant flags and are found by `/whohas find`. `armorsets.lua` (89 sets, generated from LandSandBoat data by `tools/gen_armorsets.py`) lists each set's pieces and withdrawal cost.
+- Highlighting any piece of a storable set adds a set progress section: pieces held per character (loose or on slips), what is missing, and who has the set banked. `/whohas sets` lists banked sets; `/whohas sets on|off` and `/whohas setfit on|off` toggle the two displays.
+- Delivery Box: the inbox is recorded from the result packets the server sends while the box is open (read only), so waiting items show as `Delivery Box x2`, count toward `OWNED` and are found by `/whohas find`. Taking, returning or deleting an item updates the record. `/whohas dbox` lists what is on file; `/whohas dbox on|off` toggles it.
+- Character files gain `claims` and `dbox` fields; files from earlier versions load as before. Malformed values in those fields are ignored.
+- The addon loads without `armorsets.lua` and says so.
+
 ## 1.4.1
 
 - Fix: the box could appear with an unrelated item while the Mog House door menu (and some other non-item menus) was open, because the keyword `mog` matched `mogdoor` and the client keeps a stale selected item there. Reported on retail.
