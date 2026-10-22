@@ -31,7 +31,8 @@
 *   - The addon is read-only: it never sends packets, moves items, or automates anything.
 *
 * Commands:
-*   /whohas                    Toggle the overlay on/off.
+*   /whohas                    Open or close the settings window (every option below as checkboxes;
+*                              /whohas config does the same).
 *   /whohas on | off           Enable or disable the overlay.
 *   /whohas find <text>        Search every character for an item name (prints to chat).
 *   /whohas list               List known characters and how old their data is.
@@ -66,7 +67,7 @@
 
 addon.name    = 'whohas';
 addon.author  = 'Frette';
-addon.version = '1.5.0';
+addon.version = '1.6.0';
 addon.desc    = 'Shows which of your characters hold the selected item, and how many, across all storage.';
 addon.link    = '';
 
@@ -194,6 +195,12 @@ local whohas = T{
     warned_menu  = false,
     force_pos    = false,
     zoned_at     = 0,        -- os.time() of the last zone-in packet
+    ui           = {         -- settings window state (/whohas)
+        open        = { false },
+        menus       = { '' },  -- text buffers for the menu keyword and block lists
+        menus_block = { '' },
+        confirm     = nil,     -- character name (or '*reset*') awaiting a second click
+    },
 };
 
 -------------------------------------------------------------------------------
@@ -1320,11 +1327,267 @@ local function forget_char(name)
 end
 
 -------------------------------------------------------------------------------
+-- Settings window (/whohas)
+-------------------------------------------------------------------------------
+local UI_HEADER = { 1.0, 0.65, 0.26, 1.0 };
+local UI_DIM    = { 0.6, 0.6, 0.6, 1.0 };
+local UI_GREEN  = { 0.55, 1.0, 0.55, 1.0 };
+
+-- Ashita's imgui library adds ShowHelp (a "(?)" marker with a tooltip); guarded in case it is absent.
+local function ui_help(text)
+    if (type(imgui.ShowHelp) == 'function') then imgui.ShowHelp(text); end
+end
+
+-- A checkbox bound to a boolean setting. `refresh` makes the box rebuild its rows afterwards.
+local function ui_toggle(label, key, text, refresh)
+    local on = (whohas.settings[key] == true);
+    if (imgui.Checkbox(label, { on })) then
+        whohas.settings[key] = not on;
+        if (refresh) then whohas.data_version = whohas.data_version + 1; end
+        settings.save();
+    end
+    if (text ~= nil) then ui_help(text); end
+end
+
+-- Switches the server (slip bit order and shop list); shared by the command and the window.
+local function apply_server(v)
+    whohas.settings.server = v;
+    settings.save();
+    slips.set_server(v);
+    whohas.data_version = whohas.data_version + 1;
+    msg_ok(string.format('Server set to %s: storage slip bit order and the Porter Moogle shop list now follow %s.', v, v));
+    msg('Slip contents already on file were decoded with the previous order; /whohas scan on each character (or log in on them) refreshes them.');
+end
+
+-- Normalises a comma-separated keyword list: lower-case, trimmed, de-duplicated, order kept.
+local function normalize_list(text)
+    local out, seen = { }, { };
+    for kw in tostring(text or ''):gmatch('[^,%s]+') do
+        kw = kw:lower();
+        if (not seen[kw]) then seen[kw] = true; table.insert(out, kw); end
+    end
+    return table.concat(out, ',');
+end
+
+local function reset_settings()
+    for k, v in pairs(defaults) do whohas.settings[k] = v; end
+    whohas.settings.menus_version = MENUS_VERSION;
+    slips.set_server(whohas.settings.server);
+    whohas.data_version = whohas.data_version + 1;
+    whohas.force_pos = true;
+    whohas.ui.menus[1] = whohas.settings.menus;
+    whohas.ui.menus_block[1] = whohas.settings.menus_block;
+    settings.save();
+    msg_ok('All settings reset to defaults.');
+end
+
+-- Opens (true), closes (false) or toggles (nil) the settings window.
+local function toggle_settings_window(open)
+    if (open == nil) then open = not whohas.ui.open[1]; end
+    whohas.ui.open[1] = open;
+    if (open) then
+        whohas.ui.menus[1] = whohas.settings.menus or '';
+        whohas.ui.menus_block[1] = whohas.settings.menus_block or '';
+        whohas.ui.confirm = nil;
+    end
+end
+
+local function ui_tab_overlay()
+    ui_toggle('Overlay enabled', 'enabled', 'Show the box when an item is highlighted (/whohas on|off).');
+    ui_toggle('Only inside item menus', 'menu_filter', 'Show only while an item menu is open (inventory, Mog House, shops, AH, ...). Off: whenever the client has a selected item.');
+    ui_toggle('Include the logged-in character', 'show_current', 'List the character you are on (green, live data) along with the others.', true);
+    ui_toggle('Show the box when no character has the item', 'show_missing', 'Off: the box only appears when something was found.');
+    ui_toggle('Show data age next to other characters', 'show_age', 'How long ago each other character last saved a snapshot.');
+    ui_toggle('Lock the box position', 'locked', 'Stop the box from being dragged with the mouse.');
+    local op = { tonumber(whohas.settings.opacity) or 0.85 };
+    if (imgui.SliderFloat('Opacity', op, 0.1, 1.0, '%.2f')) then
+        whohas.settings.opacity = op[1];
+        settings.save();
+    end
+    ui_help('Background opacity of the box.');
+    local pos = { math.floor(tonumber(whohas.settings.pos_x) or 0), math.floor(tonumber(whohas.settings.pos_y) or 0) };
+    if (imgui.InputInt2('Position', pos)) then
+        whohas.settings.pos_x = pos[1];
+        whohas.settings.pos_y = pos[2];
+        whohas.force_pos = true;
+        settings.save();
+    end
+    ui_help('Screen position of the box. Dragging the box updates this too.');
+    imgui.Separator();
+    if (whohas.pinned) then
+        imgui.Text('Pinned: ' .. item_display_name(whohas.pinned_item));
+        imgui.SameLine();
+        if (imgui.Button('Unpin')) then
+            whohas.pinned = false;
+            whohas.pinned_item = 0;
+        end
+    else
+        if (imgui.Button('Pin the selected item')) then
+            local id = AshitaCore:GetMemoryManager():GetInventory():GetSelectedItemId();
+            if (id == nil or id == 0 or id == GIL_ID) then
+                msg_err('Select an item first.');
+            else
+                whohas.pinned = true;
+                whohas.pinned_item = id;
+            end
+        end
+        ui_help('Keep the box up for the selected item even after closing menus (/whohas pin).');
+    end
+end
+
+local function ui_tab_sections()
+    imgui.TextColored(UI_HEADER, 'Extra sections in the box');
+    ui_toggle('Other versions (+1, -1, NQ) anyone holds', 'show_variants', 'Flags and lists the +1 / -1 / NQ versions of the selected item (and differently named HQs, cursed pieces, abjurations) held by any character.', true);
+    ui_toggle('Which storage slip the item fits', 'show_slip_fit', 'Names the Porter Moogle slip the item can be stored on and who holds that slip.', true);
+    ui_toggle('Slip contents when a slip is selected', 'show_slip_items', 'Lists what each character has stored on the selected slip.');
+    ui_toggle('Pieces banked at the Armor Depository', 'show_sets', 'Pieces stored at the Armor Depository (claim slip key items) count as owned.', true);
+    ui_toggle('Set progress for storable sets', 'show_set_fit', 'When a piece of an Armor Depository set is selected, show how much of the set each character holds and who has it banked.', true);
+    ui_toggle('Items waiting in the Delivery Box', 'show_dbox', 'Items in the inbox, as last seen, count as owned.', true);
+    imgui.Separator();
+    imgui.TextColored(UI_HEADER, 'Snapshots');
+    ui_toggle('Include the Temporary container', 'include_temporary', 'Temporary items are skipped by default.');
+    imgui.Separator();
+    imgui.TextColored(UI_HEADER, 'Server');
+    local sv = { (whohas.settings.server == 'retail') and 2 or 1 };
+    imgui.PushItemWidth(220);
+    if (imgui.Combo('Server', sv, 'Horizon (LandSandBoat)\0Retail\0\0')) then
+        local v = (sv[1] == 2) and 'retail' or 'horizon';
+        if (v ~= whohas.settings.server) then apply_server(v); end
+    end
+    imgui.PopItemWidth();
+    ui_help('Picks the storage slip bit order and the Porter Moogle shop list. After switching, log in on each character (or /whohas scan) so slip contents on file are decoded again.');
+end
+
+local function ui_tab_menus()
+    local name = get_menu_name();
+    imgui.Text('Open game menu:');
+    imgui.SameLine();
+    if (name == nil) then
+        imgui.TextColored(UI_DIM, '(menu signature not found on this client)');
+    elseif (#name == 0) then
+        imgui.TextColored(UI_DIM, '(none)');
+    else
+        imgui.TextColored(UI_GREEN, '"' .. name .. '"');
+        imgui.SameLine();
+        imgui.TextColored(UI_DIM, in_item_menu() and '(box allowed here)' or '(box hidden here)');
+    end
+    ui_help('The box shows while a menu whose name contains one of the keywords is open, unless the name also contains a blocked word. Open a menu and read its name here to tune the lists.');
+    imgui.PushItemWidth(420);
+    local apply = false;
+    if (imgui.InputText('Keywords', whohas.ui.menus, 512, ImGuiInputTextFlags_EnterReturnsTrue)) then apply = true; end
+    if (imgui.InputText('Blocked', whohas.ui.menus_block, 512, ImGuiInputTextFlags_EnterReturnsTrue)) then apply = true; end
+    imgui.PopItemWidth();
+    if (imgui.Button('Apply lists')) then apply = true; end
+    imgui.SameLine();
+    if (imgui.Button('Reset lists to defaults')) then
+        whohas.settings.menus = defaults.menus;
+        whohas.settings.menus_block = defaults.menus_block;
+        whohas.settings.menus_version = MENUS_VERSION;
+        whohas.ui.menus[1] = defaults.menus;
+        whohas.ui.menus_block[1] = defaults.menus_block;
+        settings.save();
+        msg_ok('Menu keywords and block list reset to defaults.');
+    end
+    if (apply) then
+        whohas.settings.menus = normalize_list(whohas.ui.menus[1]);
+        whohas.settings.menus_block = normalize_list(whohas.ui.menus_block[1]);
+        whohas.ui.menus[1] = whohas.settings.menus;
+        whohas.ui.menus_block[1] = whohas.settings.menus_block;
+        settings.save();
+        msg_ok('Menu keywords and block list saved.');
+    end
+    imgui.TextColored(UI_DIM, 'Comma-separated; matched anywhere in the menu name, case-insensitive.');
+end
+
+local function ui_tab_characters()
+    local names = sorted_names();
+    if (#names == 0) then
+        imgui.TextColored(UI_DIM, 'No character data yet. Log in on each character once, or click Snapshot now.');
+    else
+        local tflags = bit.bor(ImGuiTableFlags_SizingFixedFit, ImGuiTableFlags_RowBg, ImGuiTableFlags_BordersInnerV);
+        if (imgui.BeginTable('whohas_chars', 4, tflags)) then
+            imgui.TableSetupColumn('Character', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableSetupColumn('Items', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableSetupColumn('Updated', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableSetupColumn('##actions', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableHeadersRow();
+            for _, name in ipairs(names) do
+                local c = whohas.chars[name];
+                local unique, slots = 0, 0;
+                for _, per in pairs(c.items or { }) do
+                    unique = unique + 1;
+                    for _, n in pairs(per) do slots = slots + n; end
+                end
+                imgui.TableNextRow();
+                imgui.TableNextColumn();
+                if (name == whohas.me) then imgui.TextColored(UI_GREEN, name); else imgui.Text(name); end
+                imgui.TableNextColumn();
+                imgui.Text(string.format('%d unique, %d total', unique, slots));
+                imgui.TableNextColumn();
+                imgui.Text((name == whohas.me) and 'live' or age_phrase(c.updated));
+                imgui.TableNextColumn();
+                if (whohas.ui.confirm == name) then
+                    if (imgui.Button('Confirm forget##' .. name)) then
+                        whohas.ui.confirm = nil;
+                        forget_char(name);
+                    end
+                    imgui.SameLine();
+                    if (imgui.Button('Keep##' .. name)) then whohas.ui.confirm = nil; end
+                else
+                    if (imgui.Button('Forget##' .. name)) then whohas.ui.confirm = name; end
+                end
+            end
+            imgui.EndTable();
+        end
+    end
+    imgui.Separator();
+    if (imgui.Button('Snapshot this character now')) then snapshot(true); end
+    ui_help('Writes the logged-in character\'s inventory, slips, claim slips and Delivery Box record to disk right away (/whohas scan).');
+    imgui.SameLine();
+    if (imgui.Button('Reload files from disk')) then
+        local n, ni, ns = load_all_chars();
+        msg_ok(string.format('Reloaded %d character file(s) from %s (index lists %d, folder scan found %d).', n, tostring(whohas.data_path), ni, ns));
+    end
+    imgui.TextColored(UI_DIM, 'Data folder: ' .. tostring(whohas.data_path));
+end
+
+local function draw_settings()
+    if (not whohas.ui.open[1]) then return; end
+    if (imgui.Begin('whohas ' .. addon.version .. ' settings###whohas_settings', whohas.ui.open, ImGuiWindowFlags_AlwaysAutoResize)) then
+        if (imgui.BeginTabBar('##whohas_tabs')) then
+            if (imgui.BeginTabItem('Overlay', nil)) then ui_tab_overlay(); imgui.EndTabItem(); end
+            if (imgui.BeginTabItem('Sections', nil)) then ui_tab_sections(); imgui.EndTabItem(); end
+            if (imgui.BeginTabItem('Menus', nil)) then ui_tab_menus(); imgui.EndTabItem(); end
+            if (imgui.BeginTabItem('Characters', nil)) then ui_tab_characters(); imgui.EndTabItem(); end
+            imgui.EndTabBar();
+        end
+        imgui.Separator();
+        if (whohas.ui.confirm == '*reset*') then
+            imgui.TextColored({ 1.0, 0.4, 0.4, 1.0 }, 'Reset every setting to the defaults?');
+            imgui.SameLine();
+            if (imgui.Button('Yes, reset')) then
+                whohas.ui.confirm = nil;
+                reset_settings();
+            end
+            imgui.SameLine();
+            if (imgui.Button('No')) then whohas.ui.confirm = nil; end
+        else
+            if (imgui.Button('Reset all settings')) then whohas.ui.confirm = '*reset*'; end
+            imgui.SameLine();
+            if (imgui.Button('Close')) then whohas.ui.open[1] = false; end
+            imgui.SameLine();
+            imgui.TextColored(UI_DIM, '/whohas help lists the text commands.');
+        end
+    end
+    imgui.End();
+end
+
+-------------------------------------------------------------------------------
 -- Commands
 -------------------------------------------------------------------------------
 local function print_help()
     msg('Commands:');
-    msg('  /whohas               Toggle the overlay');
+    msg('  /whohas               Open or close the settings window (also /whohas config)');
     msg('  /whohas on|off        Enable or disable the overlay');
     msg('  /whohas find <text>   Search all characters for an item');
     msg('  /whohas list          List known characters');
@@ -1368,10 +1631,8 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
 
     local sub = (args[2] or ''):lower();
 
-    if (sub == '') then
-        whohas.settings.enabled = not whohas.settings.enabled;
-        settings.save();
-        msg(whohas.settings.enabled and 'Overlay enabled.' or 'Overlay disabled.');
+    if (sub == '' or sub == 'config' or sub == 'settings' or sub == 'options' or sub == 'ui') then
+        toggle_settings_window();
         return;
     end
 
@@ -1586,12 +1847,7 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
     if (sub == 'server') then
         local v = (args[3] or ''):lower();
         if (v == 'horizon' or v == 'retail') then
-            whohas.settings.server = v;
-            settings.save();
-            slips.set_server(v);
-            whohas.data_version = whohas.data_version + 1;
-            msg_ok(string.format('Server set to %s: storage slip bit order and the Porter Moogle shop list now follow %s.', v, v));
-            msg('Slip contents already on file were decoded with the previous order; /whohas scan on each character (or log in on them) refreshes them.');
+            apply_server(v);
             return;
         end
         msg(string.format('Server: %s (slip bit order and shop list). Use /whohas server horizon|retail.', whohas.settings.server));
@@ -1871,6 +2127,7 @@ end);
 -------------------------------------------------------------------------------
 ashita.events.register('d3d_present', 'whohas_present_cb', function ()
     tick_snapshot();
+    draw_settings();
 
     if (not whohas.settings.enabled) then return; end
     if (not is_logged_in()) then return; end
@@ -1916,7 +2173,7 @@ ashita.events.register('load', 'whohas_load_cb', function ()
     if (pGameMenu == nil or pGameMenu == 0) then
         msg_err('Menu signature not found; the box will show whenever an item is selected.');
     end
-    msg(string.format('Loaded %d character file(s) from %s. /whohas help for commands.', n, tostring(whohas.data_path)));
+    msg(string.format('Loaded %d character file(s) from %s. /whohas opens the settings window, /whohas help lists the commands.', n, tostring(whohas.data_path)));
     if (hqpairs == nil) then
         msg_err('hqpairs.lua not found next to whohas.lua; NQ/HQ pairs with different names (Crimson/Blood, cursed, abjurations) will not be matched.');
     end

@@ -15,10 +15,21 @@ end };
 for _, k in ipairs({ 'ImGuiWindowFlags_NoTitleBar','ImGuiWindowFlags_AlwaysAutoResize','ImGuiWindowFlags_NoFocusOnAppearing',
     'ImGuiWindowFlags_NoNav','ImGuiWindowFlags_NoSavedSettings','ImGuiWindowFlags_NoScrollbar','ImGuiWindowFlags_NoMove',
     'ImGuiTableFlags_SizingFixedFit','ImGuiTableFlags_RowBg','ImGuiTableFlags_BordersInnerV','ImGuiTableColumnFlags_WidthFixed',
-    'ImGuiCond_FirstUseEver','ImGuiCond_Always' }) do _G[k] = 1; end
+    'ImGuiCond_FirstUseEver','ImGuiCond_Always','ImGuiInputTextFlags_EnterReturnsTrue' }) do _G[k] = 1; end
 local imgui_log = {};
+-- IMGUI_ACT['<Function>:<label>'] = function (label, ...) simulates the user acting on a widget: it may
+-- change the bound table and returns what the real call would (true for a click / edit).
+IMGUI_ACT = {};
 local imgui = setmetatable({}, { __index = function (t, k)
-    return function (...) local parts = {}; for i = 1, select('#', ...) do parts[#parts+1] = tostring((select(i, ...))); end imgui_log[#imgui_log+1] = k .. '(' .. table.concat(parts, ', ') .. ')'; if k == 'Begin' or k == 'BeginTable' then return true; end if k == 'GetWindowPos' then return 100, 100; end end;
+    return function (...)
+        local args = { ... };
+        local parts = {}; for i = 1, select('#', ...) do parts[#parts+1] = tostring((select(i, ...))); end
+        imgui_log[#imgui_log+1] = k .. '(' .. table.concat(parts, ', ') .. ')';
+        local act = IMGUI_ACT[k .. ':' .. tostring(args[1])];
+        if (act ~= nil) then return act(unpack(args)); end
+        if (k:sub(1, 5) == 'Begin') then return true; end
+        if (k == 'GetWindowPos') then return 100, 100; end
+    end;
 end });
 package.preload['imgui'] = function () return imgui; end;
 package.preload['common'] = function () return {}; end;
@@ -330,6 +341,75 @@ packet(0x004B, string.rep('\0', 5)); packet(0x004B, dbox_packet(0x01, 1, 9, 1, 4
 offset = offset + 5; present();
 print_log = {}; cmd('/whohas dbox'); assert(table.concat(print_log, '\n'):find('Distilled Water x12'), 'water not back in the inbox');
 cmd('/whohas debug');
+
+-- Settings window: /whohas toggles it; widgets change settings through the ImGui stub's action hook.
+local function ui_present() imgui_log = {}; present(); return table.concat(imgui_log, '\n'); end
+local function act(key, fn) IMGUI_ACT[key] = fn or function () return true; end; ui_present(); IMGUI_ACT = {}; end
+local flip = function (label, t) t[1] = not t[1]; return true; end
+local WIN = 'Begin:whohas 1.6.0 settings###whohas_settings';
+SELECTED = 0; MENU_NAME = 'menu    inventor';
+joined = ui_present(); assert(not joined:find('whohas_settings'), 'settings window drawn before /whohas');
+cmd('/whohas'); joined = ui_present();
+assert(joined:find('Begin%(whohas 1.6.0 settings###whohas_settings') and joined:find('Checkbox%(Overlay enabled') and joined:find('BeginTabItem%(Characters') and joined:find('Combo%(Server'), 'settings window missing: ' .. joined);
+assert(joined:find('TextColored%(.-, Bravo%)') and joined:find('Text%(Alpha%)') and joined:find('Button%(Forget##Alpha%)'), 'character table missing: ' .. joined);
+-- Checkbox: disables the overlay, then re-enables it.
+act('Checkbox:Overlay enabled', flip);
+assert(whohas_settings_probe().enabled == false, 'checkbox did not disable the overlay');
+SELECTED = 4096; joined = ui_present(); assert(not joined:find('Begin%(whohas, true'), 'overlay drawn while disabled');
+act('Checkbox:Overlay enabled', flip);
+assert(whohas_settings_probe().enabled == true, 'checkbox did not re-enable the overlay');
+joined = ui_present(); assert(joined:find('Begin%(whohas, true'), 'overlay not drawn after re-enable');
+-- Opacity slider and position inputs (no item selected, so the overlay does not report its own position back).
+SELECTED = 0;
+IMGUI_ACT['SliderFloat:Opacity'] = function (label, t) t[1] = 0.42; return true; end;
+IMGUI_ACT['InputInt2:Position'] = function (label, t) t[1] = 321; t[2] = 123; return true; end;
+ui_present(); IMGUI_ACT = {};
+assert(math.abs(whohas_settings_probe().opacity - 0.42) < 0.001 and whohas_settings_probe().pos_x == 321 and whohas_settings_probe().pos_y == 123, 'slider / position not applied');
+-- Server combo (1 = horizon, 2 = retail).
+act('Combo:Server', function (label, t) t[1] = 2; return true; end);
+assert(whohas_settings_probe().server == 'retail', 'combo did not switch to retail');
+act('Combo:Server', function (label, t) t[1] = 1; return true; end);
+assert(whohas_settings_probe().server == 'horizon', 'combo did not switch back');
+-- Menu lists: type into the buffers, apply with the button; lists are normalised.
+IMGUI_ACT['InputText:Keywords'] = function (label, t) t[1] = 'Inventor, bank,BANK, custom'; return false; end;
+IMGUI_ACT['InputText:Blocked'] = function (label, t) t[1] = 'mogdoor,Foo'; return false; end;
+ui_present(); IMGUI_ACT = {};
+act('Button:Apply lists');
+assert(whohas_settings_probe().menus == 'inventor,bank,custom' and whohas_settings_probe().menus_block == 'mogdoor,foo', 'menu lists not applied: ' .. tostring(whohas_settings_probe().menus) .. ' / ' .. tostring(whohas_settings_probe().menus_block));
+act('Button:Reset lists to defaults');
+assert(whohas_settings_probe().menus_block:find('bluequip') and whohas_settings_probe().menus:find('tskill') and not whohas_settings_probe().menus:find('custom'), 'menu reset failed');
+-- Forget needs a second click; Keep cancels.
+act('Button:Forget##Alpha');
+assert(ashita.fs.exists('./fakeinstall/config/addons/whohas/chars/Alpha.lua'), 'one click forgot Alpha');
+joined = ui_present(); assert(joined:find('Button%(Confirm forget##Alpha%)') and joined:find('Button%(Keep##Alpha%)'), 'confirm buttons missing');
+act('Button:Keep##Alpha');
+joined = ui_present(); assert(not joined:find('Confirm forget##Alpha') and joined:find('Button%(Forget##Alpha%)'), 'Keep did not cancel');
+-- Section toggles refresh the rows: hiding depository pieces drops the depository copy.
+act('Checkbox:Pieces banked at the Armor Depository', flip);
+SELECTED = 12511; joined = ui_present(); assert(not joined:find('Text%(Armor Depository %(') and joined:find('OWNED x2'), 'sets checkbox did not refresh rows: ' .. joined);
+act('Checkbox:Pieces banked at the Armor Depository', flip);
+joined = ui_present(); assert(joined:find('Text%(Armor Depository %(') and joined:find('OWNED x3'), 'sets checkbox did not restore rows');
+-- Pin / Unpin buttons.
+act('Button:Pin the selected item');
+MENU_NAME = ''; joined = ui_present(); assert(joined:find('Begin%(whohas, true') and joined:find('Text%(Pinned: Fighters Mask%)'), 'pin button did not pin: ' .. joined);
+act('Button:Unpin');
+joined = ui_present(); assert(not joined:find('Begin%(whohas, true'), 'unpin button did not release');
+MENU_NAME = 'menu    inventor';
+-- Reset all asks first; No cancels; Yes resets (opacity and position back to defaults, server kept valid).
+act('Button:Reset all settings');
+joined = ui_present(); assert(joined:find('Button%(Yes, reset%)') and joined:find('Button%(No%)'), 'reset confirmation missing');
+act('Button:No');
+joined = ui_present(); assert(not joined:find('Yes, reset'), 'No did not cancel the reset');
+act('Button:Reset all settings'); act('Button:Yes, reset');
+assert(math.abs(whohas_settings_probe().opacity - 0.85) < 0.001 and whohas_settings_probe().pos_x == 100 and whohas_settings_probe().menus_version == 2, 'reset all did not restore defaults');
+-- The X closes the window; /whohas config reopens; /whohas closes again.
+act(WIN, function (label, t) t[1] = false; return false; end);
+joined = ui_present(); assert(not joined:find('whohas_settings'), 'X did not close the window');
+cmd('/whohas config'); joined = ui_present(); assert(joined:find('Begin%(whohas 1.6.0 settings'), '/whohas config did not open');
+act('Button:Close'); joined = ui_present(); assert(not joined:find('whohas_settings'), 'Close button did not close');
+cmd('/whohas'); joined = ui_present(); assert(joined:find('Begin%(whohas 1.6.0 settings'), '/whohas did not open');
+cmd('/whohas'); joined = ui_present(); assert(not joined:find('whohas_settings'), '/whohas did not close');
+SELECTED = 0;
 
 -- Server toggle: slip 05 bit 54 is a different item in the retail order, and retail sells slip 08.
 CONTAINERS[1][9] = { Id = 29316, Count = 1, Extra = string.rep('\0', 6) .. string.char(0x20) .. string.rep('\0', 21) };

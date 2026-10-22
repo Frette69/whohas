@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.0
+
+- Settings window: `/whohas` (or `/whohas config`) now opens an ImGui window with every option as a checkbox, slider or text box, in four tabs (Overlay, Sections, Menus, Characters). Menus shows the open game menu name live with the keyword and block lists editable in place; Characters lists every character on file with Snapshot, Reload and a two-click Forget. Changes save immediately; the text commands are unchanged. `/whohas on|off` still toggles the overlay (the bare command used to).
+
 ## 1.5.0
 
 - Armor Depository: each snapshot records the claim slip key items the character holds, so pieces banked there show as `Armor Depository (Fighter's armor)`, count toward `OWNED`, feed the variant flags and are found by `/whohas find`. `armorsets.lua` (89 sets, generated from LandSandBoat data by `tools/gen_armorsets.py`) lists each set's pieces and withdrawal cost.

@@ -15,6 +15,17 @@ Shows an on-screen box, whenever an item is highlighted in an item menu, listing
 
 The box lists the current character first (green), then every other character that holds the item, with the container breakdown and a per-character quantity, and a total across characters.
 
+## Settings window
+
+Type `/whohas` (or `/whohas config`) to open the settings window. Everything the text commands can change is there as a checkbox, slider or text box, in four tabs:
+
+- **Overlay**: enable/disable, only inside item menus, include the logged-in character, show when nobody has the item, data age, lock position, opacity, position, and pin/unpin the selected item.
+- **Sections**: the extra parts of the box (other versions, slip fit, slip contents, Armor Depository pieces, set progress, Delivery Box), the Temporary container, and the server (Horizon or retail).
+- **Menus**: shows the name of the game menu that is open right now and whether the box is allowed there, with the keyword and block lists as editable text.
+- **Characters**: every character on file with item counts and data age, Snapshot now, Reload, and Forget (asks for a second click).
+
+Changes apply and save immediately. The text commands below still work for everything.
+
 ## Storage slips (Porter Moogle)
 
 - Each character's storage slips are decoded from the slip's Extra data at snapshot time, using your server's bit order (`slips.lua` carries both LandSandBoat's order and the retail order; see `/whohas server` below). Items stored on a slip appear in the box as `Storage Slip 04 (Safe)` on that character's row and count toward the total.
@@ -60,7 +71,7 @@ Items waiting in a character's Delivery Box inbox are recorded from the packets 
 
 | Command | What it does |
 | --- | --- |
-| `/whohas` | Toggle the overlay on/off |
+| `/whohas` | Open or close the settings window (`/whohas config` does the same) |
 | `/whohas on` / `off` | Enable or disable the overlay |
 | `/whohas find <text>` | Search every character for an item name (prints to chat) |
 | `/whohas list` | List known characters and how old their data is |
