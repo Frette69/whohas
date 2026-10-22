@@ -260,7 +260,7 @@ assert(joined:find('Armor Depository set: Argent Attire') and joined:find('2 pie
 print_log = {}; cmd('/whohas sets'); joined = table.concat(print_log, '\n');
 assert(joined:find("Bravo: Fighter's armor %(Fighters Mask, Fighters Lorica, Fighters Mufflers, Fighters Cuisses, Fighters Leggings; 500 gil to withdraw%)"), '/whohas sets output wrong: ' .. joined);
 print_log = {}; cmd('/whohas find mufflers'); joined = table.concat(print_log, '\n');
-assert(joined:find("Fighters Mufflers.-x1 on Bravo.-%(Armor Depository %(Fighter's armor%)%)"), 'find did not reach the depository: ' .. joined);
+assert(joined:find("Fighters Mufflers.-x1: .-Bravo.-1 %(Armor Depository %(Fighter's armor%)%)"), 'find did not reach the depository: ' .. joined);
 -- Abyss Burgeonet (NQ) is owned by nobody, but the +1 sits on Bravo's Storage Slip 07
 SELECTED = 15072; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
 real_print(joined);
@@ -324,7 +324,7 @@ assert(joined:find('Total: 25 across 2 characters'), 'total should include the d
 print_log = {}; cmd('/whohas dbox'); joined = table.concat(print_log, '\n');
 assert(joined:find('Bravo: 2 item%(s%) in the Delivery Box, seen just now: Distilled Water x12, Fire Crystal x3'), '/whohas dbox output wrong: ' .. joined);
 print_log = {}; cmd('/whohas find water'); joined = table.concat(print_log, '\n');
-assert(joined:find('Distilled Water.-x12 on Bravo.-%(Delivery Box%)') and joined:find('Distilled Water.-x12 on Bravo.-%(Satchel x12%)'), 'find did not reach the delivery box: ' .. joined);
+assert(joined:find('Distilled Water.-x24: .-Bravo.-24 %(Satchel x12, Delivery Box x12%)'), 'find did not reach the delivery box: ' .. joined);
 cmd('/whohas dbox off'); SELECTED = 4096; imgui_log = {}; present(); joined = table.concat(imgui_log, '\n');
 assert(not joined:find('Delivery Box') and joined:find('Total: 22 across 2 characters'), 'dbox off still counts the delivery box: ' .. joined);
 cmd('/whohas dbox on');
@@ -346,11 +346,11 @@ cmd('/whohas debug');
 local function ui_present() imgui_log = {}; present(); return table.concat(imgui_log, '\n'); end
 local function act(key, fn) IMGUI_ACT[key] = fn or function () return true; end; ui_present(); IMGUI_ACT = {}; end
 local flip = function (label, t) t[1] = not t[1]; return true; end
-local WIN = 'Begin:whohas 1.6.0 settings###whohas_settings';
+local WIN = 'Begin:whohas 1.7.0 settings###whohas_settings';
 SELECTED = 0; MENU_NAME = 'menu    inventor';
 joined = ui_present(); assert(not joined:find('whohas_settings'), 'settings window drawn before /whohas');
 cmd('/whohas'); joined = ui_present();
-assert(joined:find('Begin%(whohas 1.6.0 settings###whohas_settings') and joined:find('Checkbox%(Overlay enabled') and joined:find('BeginTabItem%(Characters') and joined:find('Combo%(Server'), 'settings window missing: ' .. joined);
+assert(joined:find('Begin%(whohas 1.7.0 settings###whohas_settings') and joined:find('Checkbox%(Overlay enabled') and joined:find('BeginTabItem%(Characters') and joined:find('Combo%(Server'), 'settings window missing: ' .. joined);
 assert(joined:find('TextColored%(.-, Bravo%)') and joined:find('Text%(Alpha%)') and joined:find('Button%(Forget##Alpha%)'), 'character table missing: ' .. joined);
 -- Checkbox: disables the overlay, then re-enables it.
 act('Checkbox:Overlay enabled', flip);
@@ -405,11 +405,44 @@ assert(math.abs(whohas_settings_probe().opacity - 0.85) < 0.001 and whohas_setti
 -- The X closes the window; /whohas config reopens; /whohas closes again.
 act(WIN, function (label, t) t[1] = false; return false; end);
 joined = ui_present(); assert(not joined:find('whohas_settings'), 'X did not close the window');
-cmd('/whohas config'); joined = ui_present(); assert(joined:find('Begin%(whohas 1.6.0 settings'), '/whohas config did not open');
+cmd('/whohas config'); joined = ui_present(); assert(joined:find('Begin%(whohas 1.7.0 settings'), '/whohas config did not open');
 act('Button:Close'); joined = ui_present(); assert(not joined:find('whohas_settings'), 'Close button did not close');
-cmd('/whohas'); joined = ui_present(); assert(joined:find('Begin%(whohas 1.6.0 settings'), '/whohas did not open');
+cmd('/whohas'); joined = ui_present(); assert(joined:find('Begin%(whohas 1.7.0 settings'), '/whohas did not open');
 cmd('/whohas'); joined = ui_present(); assert(not joined:find('whohas_settings'), '/whohas did not close');
 SELECTED = 0;
+
+-- Search: /whohas <item name> prints one line per item with every holder, all words in any order
+-- against the short and the full name, related versions underneath, and the command words still win.
+print_log = {}; cmd('/whohas fire crystal'); joined = table.concat(print_log, '\n');
+assert(joined:find('1 item%(s%) match "fire crystal"') and joined:find('Fire Crystal.-x22: ') and joined:find('Alpha.-19 %(Inventory x12, Safe x7%)') and joined:find('Bravo.-3 %(Inventory x3%)'), 'search line wrong: ' .. joined);
+print_log = {}; cmd('/whohas mask fighters'); joined = table.concat(print_log, '\n');
+assert(joined:find('Fighters Mask.-x3: ') and joined:find("Bravo.-1 %(Armor Depository %(Fighter's armor%)%)") and joined:find('Alpha.-2 %(Locker x1, Storage Slip 04 %(Safe%)%)'), 'any-order words failed: ' .. joined);
+assert(joined:find('    %+1: .-Fgtr%. Mask %+1.-x1: .-Bravo.-1 %(Safe x1%)'), 'related +1 missing: ' .. joined);
+assert(not joined:find('Fighters Lorica'), 'lorica should not match "mask fighters"');
+-- Full name matching: "finger gauntlets" is only in the log name of Blood Fng. Gnt.
+print_log = {}; cmd('/whohas finger gauntlets'); joined = table.concat(print_log, '\n');
+assert(joined:find('Blood Fng%. Gnt%..-x1: .-Alpha.-1 %(Safe x1%)'), 'full-name matching failed: ' .. joined);
+-- A match nobody holds still shows when a related version is held: crimson -> Blood (HQ).
+print_log = {}; cmd('/whohas crimson'); joined = table.concat(print_log, '\n');
+assert(joined:find('Crimson Fng%. Gnt%..-: not held by any character') and joined:find('    HQ: .-Blood Fng%. Gnt%..-x1: .-Alpha.-1 %(Safe x1%)'), 'relation-only match failed: ' .. joined);
+-- Items that match on their own are not repeated as relations of each other.
+print_log = {}; cmd('/whohas mask'); joined = table.concat(print_log, '\n');
+assert(joined:find('2 item%(s%) match') and joined:find('Fgtr%. Mask %+1.-x1: ') and not joined:find('%+1: '), 'direct matches repeated as relations: ' .. joined);
+print_log = {}; cmd('/wh nothingburger'); assert(table.concat(print_log, '\n'):find('No character has anything matching "nothingburger"'), 'no-match message missing');
+print_log = {}; cmd('/whohas list'); assert(table.concat(print_log, '\n'):find('Known characters'), 'command word no longer wins over search');
+print_log = {}; cmd('/whohas find crystal'); assert(table.concat(print_log, '\n'):find('Fire Crystal.-x22'), '/whohas find broken');
+-- Search tab: Enter in the box fills the table, Print to chat prints the same lines.
+cmd('/whohas');
+IMGUI_ACT['InputText:##whohas_search'] = function (label, t) t[1] = 'crystal'; return true; end;
+ui_present(); IMGUI_ACT = {};
+joined = ui_present();
+assert(joined:find('1 item%(s%) match "crystal"') and joined:find('Fire Crystal x22') and joined:find('Text%(Inventory x12, Safe x7%)') and joined:find('Text%(22%)') == nil, 'search tab table wrong: ' .. joined);
+print_log = {}; act('Button:Print to chat'); assert(table.concat(print_log, '\n'):find('Fire Crystal.-x22: '), 'Print to chat failed');
+-- The table refreshes when the data changes (fire crystals leave Bravo's inventory).
+CONTAINERS[0][2] = nil; cmd('/whohas scan'); joined = ui_present();
+assert(joined:find('Fire Crystal x19') and not joined:find('Fire Crystal x22'), 'search tab did not refresh after a scan: ' .. joined);
+CONTAINERS[0][2] = { Id = 4096, Count = 3 }; cmd('/whohas scan');
+cmd('/whohas');
 
 -- Server toggle: slip 05 bit 54 is a different item in the retail order, and retail sells slip 08.
 CONTAINERS[1][9] = { Id = 29316, Count = 1, Extra = string.rep('\0', 6) .. string.char(0x20) .. string.rep('\0', 21) };

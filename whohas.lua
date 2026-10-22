@@ -34,7 +34,9 @@
 *   /whohas                    Open or close the settings window (every option below as checkboxes;
 *                              /whohas config does the same).
 *   /whohas on | off           Enable or disable the overlay.
-*   /whohas find <text>        Search every character for an item name (prints to chat).
+*   /whohas <item name>        Search every character for an item (all words, any order; short or full
+*                              name) and list who holds it, where, and how many, plus the other versions
+*                              (+1, -1, NQ, differently named HQ) anyone holds. /whohas find <text> is the same.
 *   /whohas list               List known characters and how old their data is.
 *   /whohas files              Show the data folder and the files found there (troubleshooting).
 *   /whohas reload             Re-read the character files from disk.
@@ -67,7 +69,7 @@
 
 addon.name    = 'whohas';
 addon.author  = 'Frette';
-addon.version = '1.6.0';
+addon.version = '1.7.0';
 addon.desc    = 'Shows which of your characters hold the selected item, and how many, across all storage.';
 addon.link    = '';
 
@@ -200,6 +202,8 @@ local whohas = T{
         menus       = { '' },  -- text buffers for the menu keyword and block lists
         menus_block = { '' },
         confirm     = nil,     -- character name (or '*reset*') awaiting a second click
+        search      = { '' },  -- Search tab text box
+        results     = nil,     -- last search: { list, matched, needle, version }
     },
 };
 
@@ -1204,76 +1208,120 @@ local function draw_box(id)
 end
 
 -------------------------------------------------------------------------------
--- Chat search (findall-style)
+-- Search (/whohas <item name>, findall-style)
 -------------------------------------------------------------------------------
-local function find_items(text)
+local SEARCH_LIMIT = 40;   -- items listed per search before "and N more"
+
+-- Finds every item any character holds whose short or full name contains all the words of
+-- `text` (any order), plus items nobody holds whose name matches but that relate to a held item
+-- (searching "crimson" reaches the Blood piece on someone's slip). Each result carries the
+-- per-character rows from build_rows and the related versions anyone holds (+1, -1, NQ, and the
+-- hqpairs relations) that are not matches in their own right.
+-- Returns the list (sorted by name, capped at SEARCH_LIMIT), the total number of matches, and
+-- the text actually searched for (auto-translate phrases resolved).
+local function search_items(text)
     local needle = AshitaCore:GetChatManager():ParseAutoTranslate(text, false) or text;
-    needle = needle:lower();
-    local res = AshitaCore:GetResourceManager();
-    local hits = { };
-    local name_cache = { };
-    local function name_of(id)
-        local iname = name_cache[id];
-        if (iname == nil) then
-            local item = res:GetItemById(id);
-            iname = (item ~= nil and item.Name ~= nil and item.Name[1]) or '';
-            name_cache[id] = iname;
-        end
-        return iname;
+    local words = { };
+    for w in tostring(needle):lower():gmatch('%S+') do table.insert(words, w); end
+    if (#words == 0) then return { }, 0, needle; end
+    if (whohas.name_index == nil or whohas.name_index_version ~= whohas.data_version) then
+        rebuild_name_index();
     end
-    for cname, c in pairs(whohas.chars) do
-        for id, per in pairs(c.items) do
-            local iname = name_of(id);
-            if (#iname > 0 and iname:lower():find(needle, 1, true)) then
-                local cids = { };
-                for cid, _ in pairs(per) do table.insert(cids, cid); end
-                table.sort(cids);
-                local where = { };
-                local count = 0;
-                for _, cid in ipairs(cids) do
-                    count = count + per[cid];
-                    table.insert(where, string.format('%s x%d', container_name(cid), per[cid]));
+    -- Everything anyone holds, plus the hqpairs relations of those items (held or not).
+    local held = { };
+    local candidates = { };
+    for _, group in pairs(whohas.name_index) do
+        for id, _ in pairs(group) do
+            held[id] = true;
+            candidates[id] = true;
+            if (hqpairs ~= nil) then
+                local ok, rel = pcall(hqpairs.related, id);
+                if (ok and type(rel) == 'table') then
+                    for _, r in ipairs(rel) do candidates[r.id] = true; end
                 end
-                table.insert(hits, { item = iname, char = cname, count = count, where = table.concat(where, ', ') });
-            end
-        end
-        -- Items stored on this character's storage slips.
-        for sid, s in pairs(c.slips or { }) do
-            for _, id in ipairs(s.items or { }) do
-                local iname = name_of(id);
-                if (#iname > 0 and iname:lower():find(needle, 1, true)) then
-                    table.insert(hits, { item = iname, char = cname, count = 1, where = string.format('%s in %s', slips.name(sid), container_name(s.container or 0)) });
-                end
-            end
-        end
-        -- Pieces banked at the Armor Depository.
-        for id, sets in pairs(c.banked or { }) do
-            local iname = name_of(id);
-            if (#iname > 0 and iname:lower():find(needle, 1, true)) then
-                for _, s in ipairs(sets) do
-                    table.insert(hits, { item = iname, char = cname, count = 1, where = 'Armor Depository (' .. set_label(s) .. ')' });
-                end
-            end
-        end
-        -- Items waiting in the Delivery Box.
-        for id, n in pairs((c.dbox or { }).items or { }) do
-            local iname = name_of(id);
-            if (#iname > 0 and iname:lower():find(needle, 1, true)) then
-                table.insert(hits, { item = iname, char = cname, count = n, where = 'Delivery Box' });
             end
         end
     end
-    table.sort(hits, function (a, b)
-        if (a.item ~= b.item) then return a.item < b.item; end
-        return a.char < b.char;
+    local function matches(id)
+        local hay = (item_display_name(id) .. ' ' .. item_match_name(id)):lower();
+        for _, w in ipairs(words) do
+            if (not hay:find(w, 1, true)) then return false; end
+        end
+        return true;
+    end
+    local direct = { };
+    local is_direct = { };
+    for id, _ in pairs(candidates) do
+        if (matches(id)) then
+            table.insert(direct, id);
+            is_direct[id] = true;
+        end
+    end
+    table.sort(direct, function (a, b)
+        local na, nb = item_display_name(a), item_display_name(b);
+        if (na ~= nb) then return na < nb; end
+        return a < b;
     end);
-    if (#hits == 0) then
-        msg(string.format('No character has anything matching "%s".', text));
+    local results = { };
+    local matched = 0;
+    for _, id in ipairs(direct) do
+        local rows, total = { }, 0;
+        if (held[id]) then rows, total = build_rows(id, true); end
+        local entry = { id = id, name = item_display_name(id), rows = rows, total = total, related = { } };
+        local seen = { [id] = true };
+        local function add_related(vid, role)
+            if (seen[vid] or is_direct[vid] or not held[vid]) then return; end
+            seen[vid] = true;
+            local vrows, vtotal = build_rows(vid, true);
+            if (vtotal > 0) then
+                table.insert(entry.related, { id = vid, name = item_display_name(vid), role = role, rows = vrows, total = vtotal });
+            end
+        end
+        for vid, vname in pairs(whohas.name_index[base_name(item_match_name(id))] or { }) do
+            add_related(vid, name_suffix(vname));
+        end
+        if (hqpairs ~= nil) then
+            local ok, rel = pcall(hqpairs.related, id);
+            if (ok and type(rel) == 'table') then
+                for _, r in ipairs(rel) do add_related(r.id, r.role); end
+            end
+        end
+        if (total > 0 or #entry.related > 0) then
+            matched = matched + 1;
+            if (#results < SEARCH_LIMIT) then table.insert(results, entry); end
+        end
+    end
+    return results, matched, needle;
+end
+
+-- "Alpha 19 (Inventory x12, Safe x7), Bravo 3 (Inventory x3)" for the chat line.
+local function holders_text(rows)
+    local parts = { };
+    for _, r in ipairs(rows) do
+        table.insert(parts, chat.color1(5, r.name) .. chat.message(string.format(' %d (%s)', r.count, r.where)));
+    end
+    return table.concat(parts, chat.message(', '));
+end
+
+local function find_items(text)
+    local results, matched, needle = search_items(text);
+    if (matched == 0) then
+        msg(string.format('No character has anything matching "%s".', needle));
         return;
     end
-    msg(string.format('Matches for "%s":', text));
-    for _, h in ipairs(hits) do
-        print(chat.header(addon.name) .. chat.color1(6, h.item) .. chat.message(string.format(' x%d on ', h.count)) .. chat.color1(5, h.char) .. chat.message(' (' .. h.where .. ')'));
+    msg(string.format('%d item(s) match "%s":', matched, needle));
+    for _, e in ipairs(results) do
+        if (e.total > 0) then
+            print(chat.header(addon.name) .. chat.color1(6, e.name) .. chat.message(string.format(' x%d: ', e.total)) .. holders_text(e.rows));
+        else
+            print(chat.header(addon.name) .. chat.color1(6, e.name) .. chat.message(': not held by any character'));
+        end
+        for _, v in ipairs(e.related) do
+            print(chat.header(addon.name) .. chat.message('    ' .. v.role .. ': ') .. chat.color1(6, v.name) .. chat.message(string.format(' x%d: ', v.total)) .. holders_text(v.rows));
+        end
+    end
+    if (matched > #results) then
+        msg(string.format('... and %d more. Add another word to narrow it down.', matched - #results));
     end
 end
 
@@ -1551,6 +1599,76 @@ local function ui_tab_characters()
     imgui.TextColored(UI_DIM, 'Data folder: ' .. tostring(whohas.data_path));
 end
 
+local function ui_tab_search()
+    imgui.PushItemWidth(300);
+    local go = imgui.InputText('##whohas_search', whohas.ui.search, 128, ImGuiInputTextFlags_EnterReturnsTrue);
+    imgui.PopItemWidth();
+    imgui.SameLine();
+    if (imgui.Button('Search')) then go = true; end
+    imgui.SameLine();
+    if (imgui.Button('Print to chat')) then
+        if (#whohas.ui.search[1] > 0) then find_items(whohas.ui.search[1]); end
+    end
+    ui_help('Part of an item name; several words match in any order (/whohas <item name> does the same in chat).');
+    local r = whohas.ui.results;
+    if (go and #whohas.ui.search[1] > 0) then
+        local list, matched, needle = search_items(whohas.ui.search[1]);
+        r = { list = list, matched = matched, needle = needle, version = whohas.data_version };
+        whohas.ui.results = r;
+    elseif (r ~= nil and r.version ~= whohas.data_version) then
+        -- Inventories changed since the search: refresh it.
+        local list, matched, needle = search_items(r.needle);
+        r = { list = list, matched = matched, needle = needle, version = whohas.data_version };
+        whohas.ui.results = r;
+    end
+    if (r == nil) then
+        imgui.TextColored(UI_DIM, 'Type part of an item name and press Enter.');
+        return;
+    end
+    if (r.matched == 0) then
+        imgui.TextColored(UI_DIM, string.format('No character has anything matching "%s".', r.needle));
+        return;
+    end
+    imgui.Text(string.format('%d item(s) match "%s"%s', r.matched, r.needle, (r.matched > #r.list) and string.format(' (first %d shown)', #r.list) or ''));
+    local tflags = bit.bor(ImGuiTableFlags_SizingFixedFit, ImGuiTableFlags_RowBg, ImGuiTableFlags_BordersInnerV);
+    if (imgui.BeginChild('whohas_search_results', { 600, 320 })) then
+        if (imgui.BeginTable('whohas_search_tbl', 4, tflags)) then
+            imgui.TableSetupColumn('Item', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableSetupColumn('Character', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableSetupColumn('Where', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableSetupColumn('Qty', ImGuiTableColumnFlags_WidthFixed);
+            imgui.TableHeadersRow();
+            local function item_rows(label, color, rows, total)
+                if (#rows == 0) then
+                    imgui.TableNextRow();
+                    imgui.TableNextColumn(); imgui.TextColored(color, label);
+                    imgui.TableNextColumn(); imgui.TextDisabled('not held');
+                    imgui.TableNextColumn(); imgui.Text('');
+                    imgui.TableNextColumn(); imgui.Text('0');
+                    return;
+                end
+                for k, row in ipairs(rows) do
+                    imgui.TableNextRow();
+                    imgui.TableNextColumn();
+                    if (k == 1) then imgui.TextColored(color, string.format('%s x%d', label, total)); else imgui.Text(''); end
+                    imgui.TableNextColumn();
+                    if (row.current) then imgui.TextColored(UI_GREEN, row.name); else imgui.Text(row.name); end
+                    imgui.TableNextColumn(); imgui.Text(row.where);
+                    imgui.TableNextColumn(); imgui.Text(tostring(row.count));
+                end
+            end
+            for _, e in ipairs(r.list) do
+                item_rows(e.name, { 1.0, 0.85, 0.4, 1.0 }, e.rows, e.total);
+                for _, v in ipairs(e.related) do
+                    item_rows('  ' .. v.role .. ': ' .. v.name, { 1.0, 0.75, 0.3, 1.0 }, v.rows, v.total);
+                end
+            end
+            imgui.EndTable();
+        end
+    end
+    imgui.EndChild();
+end
+
 local function draw_settings()
     if (not whohas.ui.open[1]) then return; end
     if (imgui.Begin('whohas ' .. addon.version .. ' settings###whohas_settings', whohas.ui.open, ImGuiWindowFlags_AlwaysAutoResize)) then
@@ -1559,6 +1677,7 @@ local function draw_settings()
             if (imgui.BeginTabItem('Sections', nil)) then ui_tab_sections(); imgui.EndTabItem(); end
             if (imgui.BeginTabItem('Menus', nil)) then ui_tab_menus(); imgui.EndTabItem(); end
             if (imgui.BeginTabItem('Characters', nil)) then ui_tab_characters(); imgui.EndTabItem(); end
+            if (imgui.BeginTabItem('Search', nil)) then ui_tab_search(); imgui.EndTabItem(); end
             imgui.EndTabBar();
         end
         imgui.Separator();
@@ -1589,7 +1708,7 @@ local function print_help()
     msg('Commands:');
     msg('  /whohas               Open or close the settings window (also /whohas config)');
     msg('  /whohas on|off        Enable or disable the overlay');
-    msg('  /whohas find <text>   Search all characters for an item');
+    msg('  /whohas <item name>   Search all characters for an item (also /whohas find <text>)');
     msg('  /whohas list          List known characters');
     msg('  /whohas files         Show the data folder and what is on disk');
     msg('  /whohas reload        Re-read the character files');
@@ -2025,6 +2144,12 @@ ashita.events.register('command', 'whohas_command_cb', function (e)
         return;
     end
 
+    -- Anything else is an item name: /whohas fire crystal
+    local text = e.command:match('^/%S+%s+(.+)$');
+    if (text ~= nil and #text > 0) then
+        find_items(text);
+        return;
+    end
     msg_err('Unknown command. /whohas help for the list.');
 end);
 

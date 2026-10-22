@@ -23,8 +23,24 @@ Type `/whohas` (or `/whohas config`) to open the settings window. Everything the
 - **Sections**: the extra parts of the box (other versions, slip fit, slip contents, Armor Depository pieces, set progress, Delivery Box), the Temporary container, and the server (Horizon or retail).
 - **Menus**: shows the name of the game menu that is open right now and whether the box is allowed there, with the keyword and block lists as editable text.
 - **Characters**: every character on file with item counts and data age, Snapshot now, Reload, and Forget (asks for a second click).
+- **Search**: a text box that lists the same results as `/whohas <item name>` in a table, with a Print to chat button.
 
 Changes apply and save immediately. The text commands below still work for everything.
+
+## Searching (`/whohas <item name>`)
+
+Type `/whohas` followed by part of an item name and every character is searched, findall style, with one chat line per item:
+
+```
+2 item(s) match "fighters mask":
+Fighters Mask x3: Bravo 1 (Armor Depository (Fighter's armor)), Alpha 2 (Locker x1, Storage Slip 04 (Safe))
+    +1: Fgtr. Mask +1 x1: Bravo 1 (Safe x1)
+```
+
+- Several words match in any order, against both the short name shown in menus and the full name (`finger gauntlets` finds `Blood Fng. Gnt.`).
+- Everything the box knows about is searched: containers, storage slips, the Armor Depository and the Delivery Box.
+- Other versions anyone holds are listed under the match: +1 / -1 / NQ, and the differently named pairs from `hqpairs.lua` (cursed pieces, abjurations, Crimson -> Blood). A name that matches but that nobody holds still shows when a related version is held, so `/whohas crimson` tells you about the Blood piece on someone's slip.
+- Any word that is not a command is treated as a search; `/whohas find <text>` does the same. Long lists stop at 40 items and ask for another word.
 
 ## Storage slips (Porter Moogle)
 
@@ -73,7 +89,7 @@ Items waiting in a character's Delivery Box inbox are recorded from the packets 
 | --- | --- |
 | `/whohas` | Open or close the settings window (`/whohas config` does the same) |
 | `/whohas on` / `off` | Enable or disable the overlay |
-| `/whohas find <text>` | Search every character for an item name (prints to chat) |
+| `/whohas <item name>` | Search every character for an item, findall style; `/whohas find <text>` is the same |
 | `/whohas list` | List known characters and how old their data is |
 | `/whohas scan` | Force a snapshot of the current character right now |
 | `/whohas pin` / `unpin` | Keep the box up for the last item, even after closing menus (handy while walking to the Mog House) |

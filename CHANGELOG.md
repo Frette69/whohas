@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.0
+
+- `/whohas <item name>` searches every character, findall style: one chat line per item with every holder, their containers (slips, Armor Depository and Delivery Box included) and counts. Several words match in any order against the short and the full item name. Other versions anyone holds (+1 / -1 / NQ and the `hqpairs.lua` relations) are listed under the match, and a name nobody holds still shows when a related version is held (`/whohas crimson` lists the Blood piece). Any text that is not a command searches; `/whohas find <text>` is unchanged. Lists stop at 40 items.
+- Settings window: a Search tab with the same results in a table (refreshes when inventories change) and a Print to chat button.
+
 ## 1.6.0
 
 - Settings window: `/whohas` (or `/whohas config`) now opens an ImGui window with every option as a checkbox, slider or text box, in four tabs (Overlay, Sections, Menus, Characters). Menus shows the open game menu name live with the keyword and block lists editable in place; Characters lists every character on file with Snapshot, Reload and a two-click Forget. Changes save immediately; the text commands are unchanged. `/whohas on|off` still toggles the overlay (the bare command used to).
