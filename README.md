@@ -79,9 +79,12 @@ Items waiting in a character's Delivery Box inbox are recorded from the packets 
 
 ## Install
 
-1. Copy the `whohas` folder into `<Ashita>\addons\` so you end up with `addons\whohas\whohas.lua`, `slips.lua`, `hqpairs.lua` and `armorsets.lua` side by side. A zip downloaded from GitHub unpacks as `whohas-main`; rename that folder to `whohas` first.
-2. `/addon load whohas` (or add it to your `default.txt`).
-3. Log in on each of your characters once. Each login writes that character's file. From then on the file updates automatically whenever that character's inventory changes.
+1. Download the latest `whohas-x.y.z.zip` from the [Releases page](https://github.com/Frette69/whohas/releases) and unzip it. It contains a `whohas` folder with everything the addon needs.
+2. Copy that folder into `<Ashita>\addons\` so you end up with `addons\whohas\whohas.lua`, `slips.lua`, `hqpairs.lua` and `armorsets.lua` side by side.
+3. `/addon load whohas` (or add it to your `default.txt`).
+4. Log in on each of your characters once. Each login writes that character's file. From then on the file updates automatically whenever that character's inventory changes.
+
+Upgrading: unzip the new release over the old folder and `/addon reload whohas`. Settings and character data live under `config\addons\whohas\` and are kept. (If you take the source from Code > Download ZIP instead of a release, the folder unpacks as `whohas-main`; rename it to `whohas`.)
 
 ## Commands
 
